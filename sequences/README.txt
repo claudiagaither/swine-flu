@@ -18,3 +18,10 @@ C:\Users\narma\OneDrive - University of North Carolina at Chapel Hill\PhD_resear
 2) .gitattributes- Narmada
 	- I had to convert the file endings to Unix in Longleaf which Git (and Windows) will try to convert back to Windows line endings
 	- This file will specify to keep these endings if we need to put these sequences back through Longleaf
+
+3/3/2026
+
+1) tsvs folder- Narmada, these contain:
+	- H3N2_gisaid_dates.tsv: sequence names with dates parsed to input into BEAUTI
+	- H3N2_gisaid_states.tsv: sequence names with states parsed to input into BEAUTI
+
