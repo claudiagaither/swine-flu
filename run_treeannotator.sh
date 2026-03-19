@@ -12,11 +12,11 @@ module purge
 module load beast/1.10.4
 
 # Give Java most of the allocated memory
-export _JAVA_OPTIONS="-Xmx120g"
+export _JAVA_OPTIONS="-Xmx120g -XX:+UseG1GC"
 
 # Paths — update these to match your files
-INTREES="combined.trees"
-OUTTREE="mcc.tree"
+INTREES="combined_epifluHA_2010.trees"
+OUTTREE="mcc_combined_epifluHA_2010.trees"
 
 # Burn-in: 4491 trees (= 44906000 states from your run)
 treeannotator \
