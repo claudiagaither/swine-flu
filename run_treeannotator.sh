@@ -15,7 +15,7 @@ module load beast/1.10.4
 export _JAVA_OPTIONS="-Xmx120g -XX:+UseG1GC"
 
 # Paths — update these to match your files
-INTREES="comb_epiflu_HA2010_v6.trees"
+INTREES="/work/users/f/r/franc/swine_flu/combine_trees/H3N2_2010_v6/comb_epiflu_HA2010_v6.trees"
 OUTTREE="mcc_comb_epiflu_HA2010_v6.trees"
 
 # Burn-in: 5917 trees (= 5917000 states from your run)
