@@ -15,12 +15,12 @@ module load beast/1.10.4
 export _JAVA_OPTIONS="-Xmx120g -XX:+UseG1GC"
 
 # Paths — update these to match your files
-INTREES="combined_epifluHA_2010.trees"
-OUTTREE="mcc_combined_epifluHA_2010.trees"
+INTREES="comb_epiflu_HA2010_v6.trees"
+OUTTREE="mcc_comb_epiflu_HA2010_v6.trees"
 
-# Burn-in: 4491 trees (= 44906000 states from your run)
+# Burn-in: 5917 trees (= 5917000 states from your run)
 treeannotator \
-    -burnin 4491 \
+    -burnin 5917 \
     -heights ca \
     "$INTREES" \
     "$OUTTREE"
