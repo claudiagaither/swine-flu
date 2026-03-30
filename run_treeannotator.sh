@@ -7,6 +7,8 @@
 #SBATCH -t 12:00:00
 #SBATCH -o treeannotator_%j.out
 #SBATCH -e treeannotator_%j.err
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=franc@email.unc.edu
 
 module purge
 module load beast/1.10.4
