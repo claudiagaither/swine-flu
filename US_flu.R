@@ -4,6 +4,8 @@
 
 ## part one: BEAST input ----
 
+source("US_flu_functions.R")
+
 ## part A: BEAST input
 #libraries
 library(ape)
@@ -24,6 +26,7 @@ library(tidyverse)
 library(treeio)
 library(viridis)
 library(writexl)
+library(xml2)
 
 
 ## import US climate metadata
@@ -34,10 +37,10 @@ states <- states %>% filter(NAME!="U.S. Virgin Islands")
 states <- states %>% filter(NAME!="Puerto Rico")
 
 ## import clade assignments from BVBRC
-tip_clades <- read.csv("C:/Users/cgait/OneDrive/Desktop/1990_v1/clade_assignment_updated.csv")
+tip_clades <- read.csv("C:/Users/cgait/OneDrive/Desktop/BEAST runs/1990_v1/clade_assignment_updated.csv")
 
 ## import combined maximum clade credibility (MCC) tree from TreeAnnotator
-mcc_tree <- read.beast("C:/Users/cgait/OneDrive/Desktop/1990_v1/mcc_1990_v1_150k.trees")
+mcc_tree <- read.beast("C:/Users/cgait/OneDrive/Desktop/BEAST runs/1990_v1/mcc_1990_v1_150k.trees")
 options(ignore.negative.edge = TRUE)
 
 # Read the FASTA
@@ -102,7 +105,7 @@ options(ignore.negative.edge = TRUE)
 
 
 ## import & clean metadata
-tip_dates <- read.table("C:/Users/cgait/OneDrive/Desktop/1990_v1/aligned_HA_1990_dates.txt",
+tip_dates <- read.table("C:/Users/cgait/OneDrive/Desktop/BEAST runs/1990_v1/aligned_HA_1990_dates.txt",
                         header = TRUE, sep = "\t")
 tip_dates$date <- as.Date(tip_dates$date)
 tip_meta <- tip_dates
@@ -170,39 +173,37 @@ tip_meta <- tip_meta %>% mutate(region = case_when(
 
 # Create complete metadata for all tree tips
 all_tree_tips <- data.frame(sequence_name = mcc_tree@phylo$tip.label)
-
 # Merge with your existing tip_meta (keeping all tree tips)
 tip_meta <- merge(all_tree_tips, tip_meta, by = "sequence_name", all.x = TRUE)
-
 # Then merge with clade assignments
-tip_meta_clades <- merge(tip_meta, tip_clades, by = "sequence_name", all.x = TRUE)
+tip_meta <- merge(tip_meta, tip_clades, by = "sequence_name", all.x = TRUE)
 
 #clean clade assignments
-tip_meta_clades <- tip_meta_clades %>% mutate(clade = case_when(
-                                       clade == "Other-Human-2020" ~ "Other human",
-                                       clade == "Other-Human-1970" ~ "Other human",
-                                       clade == "Other-Human-1970-like" ~ "Other human",
-                                       clade == "Other-Human-2000" ~ "Other human",
-                                       clade == "Other-Human-2000-like" ~ "Other human",
-                                       clade == "Other-Human-2010" ~ "Other human",
-                                       clade == "Other-Human-2010-like" ~ "Other human",
-                                       TRUE ~ clade))
-tip_meta_clades <- tip_meta_clades %>% mutate(clade = case_when(
-                                      clade == "1990.4-like" ~ "1990.4(-like)",
-                                      clade == "1990.4" ~ "1990.4(-like)",
-                                      clade == "1990.4.b1" ~ "1990.4.b1 & b2",
-                                      clade == "1990.4.b2" ~ "1990.4.b1 & b2",
-                                      clade == "" ~ "Missing",
-                                      clade == "2010.1-like" ~ "2010.1(-like)",
-                                      clade == "2010.1" ~ "2010.1(-like)",
-                                      is.na(clade) ~ "Missing",
-                                      TRUE ~ clade))
+tip_meta <- tip_meta %>% mutate(clade = case_when(
+                                clade == "Other-Human-2020" ~ "Other human",
+                                clade == "Other-Human-1970" ~ "Other human",
+                                clade == "Other-Human-1970-like" ~ "Other human",
+                                clade == "Other-Human-2000" ~ "Other human",
+                                clade == "Other-Human-2000-like" ~ "Other human",
+                                clade == "Other-Human-2010" ~ "Other human",
+                                clade == "Other-Human-2010-like" ~ "Other human",
+                                TRUE ~ clade))
+tip_meta <- tip_meta %>% mutate(clade = case_when(
+                                clade == "1990.4-like" ~ "1990.4like",
+                                clade == "1990.4" ~ "1990.4like",
+                                clade == "1990.4.b1" ~ "1990.4.b1b2",
+                                clade == "1990.4.b2" ~ "1990.4.b1b2",
+                                clade == "" ~ "Missing",
+                                clade == "2010.1-like" ~ "2010.1like",
+                                clade == "2010.1" ~ "2010.1like",
+                                is.na(clade) ~ "Missing",
+                                TRUE ~ clade))
 #table(tip_meta_clades$clade, useNA="always")
 
 ## once ESS values (excluding coalescent, join & prior if necessary, but ideally all values) are above 200, 
 ## export and combine .trees files using LogCombiner, then put combined tree into TreeAnnotator for the MCC tree
 
-## part two: MCC tree---- 
+## part two: MCC tree ---- 
 
 ## prune sequences from 1970s? or just crop tree ??
 #remove_tips <- c("A/swine/Illinois/A00857131/2011|EPI_ISL_121898|A_/_H3N2||||2011-09-24|HA|4")
@@ -225,7 +226,7 @@ tree_phylo <- mcc_tree@phylo
 #table(tip_meta_clades$clade, useNA="always")
 
 #color tips by clade assignments made using BV-BRC
-tree_clade <- ggtree(mcc_tree) %<+% tip_meta_clades +
+tree_clade <- ggtree(mcc_tree) %<+% tip_meta +
   geom_tippoint(aes(color = clade), alpha=0.5, size = 3) +
   scale_color_paletteer_d("ggsci::default_ucscgb") + 
   theme_tree2() + coord_cartesian(xlim = c(1990, 2033)) +
@@ -253,7 +254,7 @@ mcc_tree_pruned <- mcc_tree
 mcc_tree_pruned@phylo <- pruned_tree
 
 # Re-plot with pruned tree
-tree_clade_pruned <- ggtree(mcc_tree_pruned) %<+% tip_meta_clades +
+tree_clade_pruned <- ggtree(mcc_tree_pruned) %<+% tip_meta +
   geom_tippoint(aes(color = clade), alpha = 0.5, size = 3) +
   scale_color_paletteer_d("ggsci::default_ucscgb") +
   theme_tree2() + coord_cartesian(xlim = c(120, 175)) +
@@ -264,7 +265,174 @@ tree_clade_pruned <- ggtree(mcc_tree_pruned) %<+% tip_meta_clades +
 #tree_clade_pruned
 #ggsave("C:/Users/cgait/OneDrive/Desktop/clades_pruned.jpeg",width=20,height=25,units=c("cm"),tree_clade_pruned)
 
-## part three: continuous traits? ----
+
+## part three: XMLs for homogeneous Brownian diffusion ----
+
+## template XML produced by BEAUTi (contains all 4589 taxa + sequences)
+xml_path  <- "C:/Users/cgait/OneDrive/Desktop/1990_v2/1990_USflu_tree.xml"
+out_dir   <- "C:/Users/cgait/OneDrive/Desktop/1990_v2/clade_xmls"
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+## MCMC settings (adjust as needed)
+chain_length   <- 100000000   # 100 million
+log_every      <- 10000       # sample every 10 000
+save_every     <- 100000      # checkpoint every 100 000
+
+## Parse template XML 
+##    Build lookup tables: taxon_id → decimal date, taxon_id → sequence
+doc <- read_xml(xml_path)
+
+## extract all <taxon> nodes inside <taxa>
+taxa_nodes <- xml_find_all(doc, ".//taxa/taxon")
+taxon_ids  <- xml_attr(taxa_nodes, "id")
+taxon_dates <- sapply(taxa_nodes, function(nd) {
+  xml_attr(xml_find_first(nd, "date"), "value")
+})
+names(taxon_dates) <- taxon_ids
+
+## extract all <sequence> nodes – each has a <taxon idref="..."/> + raw text
+seq_nodes <- xml_find_all(doc, ".//alignment/sequence")
+seq_ids   <- sapply(seq_nodes, function(nd) {
+  xml_attr(xml_find_first(nd, "taxon"), "idref")
+})
+seq_seqs  <- sapply(seq_nodes, function(nd) {
+  trimws(xml_text(nd))
+})
+names(seq_seqs) <- seq_ids
+#cat("Parsed", length(taxon_ids), "taxa and", length(seq_ids), "sequences from template.\n")
+
+
+## Lat/lon lookup from state swine centers
+ locations <- data.frame(
+   state = c("Iowa","Minnesota","Illinois","Indiana","Ohio","North Carolina",
+             "Pennsylvania","Michigan","Wisconsin","Kentucky","Arkansas",
+             "Oklahoma","Texas","Missouri","Kansas","Colorado","Wyoming",
+             "Utah","Nebraska","South Dakota",
+             ## ── states added to cover all tips ──
+             "Alabama","Arizona","California","Florida","Georgia",
+             "Louisiana","Maryland","Montana","New Mexico","New York",
+             "North Dakota","Oregon","South Carolina","Tennessee",
+             "Virginia","West Virginia"),
+   lat = c(42.783, 44.105, 40.383, 40.843, 40.613, 35.236,
+           40.475, 42.952, 43.631, 37.232, 34.300, 36.666,
+           31.542, 40.074, 39.636, 39.021, 41.509, 38.172,
+           41.452, 43.374,
+           ## ── added states ──
+           32.806,  34.048,  36.778,  27.995,  33.040,
+           31.169,  39.046,  46.813,  34.840,  42.165,
+           47.528,  44.572,  33.836,  35.518,
+           37.769,  38.468),
+   lon = c(-94.428, -95.262, -89.271, -86.314, -83.635, -78.193,
+           -76.939, -85.810, -90.184, -87.148, -93.872, -99.812,
+           -96.576, -92.102, -96.882, -102.390, -104.463, -113.663,
+           -97.284, -97.486,
+           ## ── added states ──
+           -86.791, -111.094, -119.418, -81.760, -83.644,
+           -91.867,  -76.641, -110.362, -106.249, -74.949,
+           -99.784, -122.071,  -81.164, -86.580,
+           -78.170,  -80.955))
+
+
+## Build a named-vector lookup  state → c(lat, lon)
+loc_lat <- setNames(locations$lat, locations$state)
+loc_lon <- setNames(locations$lon, locations$state)
+ 
+
+ ## Expand locations to cover ALL states that appear in tip_meta.
+ ## These are approximate state centroids — update with your swine center
+ ## coordinates once you have them for these states.
+ extra_states <- data.frame(
+   state = c("Alabama","Arizona","California","Florida","Georgia",
+             "Louisiana","Maryland","Montana","New Mexico","New York",
+             "North Dakota","Oregon","South Carolina","Tennessee",
+             "Virginia","West Virginia"),
+   lat   = c(32.806, 34.048, 36.778, 27.995, 33.040,
+             31.169, 39.046, 46.813, 34.840, 42.165,
+             47.528, 44.572, 33.836, 35.518,
+             37.769, 38.468),
+   lon   = c(-86.791, -111.094, -119.418, -81.760, -83.644,
+             -91.867, -76.641, -110.362, -106.249, -74.949,
+             -99.784, -122.071, -81.164, -86.580,
+             -78.170, -80.955))
+ 
+ ## only add states not already in the table
+ extra_states <- extra_states[!extra_states$state %in% names(loc_lat), ]
+ if (nrow(extra_states) > 0) {
+   cat("Adding centroid coordinates for", nrow(extra_states), "extra states:",
+       paste(extra_states$state, collapse = ", "), "\n")
+   loc_lat <- c(loc_lat, setNames(extra_states$lat, extra_states$state))
+   loc_lon <- c(loc_lon, setNames(extra_states$lon, extra_states$state))
+ }
+ 
+ ## ── 2b. Check which states in tip_meta are still un-geocoded ────────────────
+ all_states_in_data <- unique(na.omit(tip_meta$state))
+ missing_states     <- setdiff(all_states_in_data, names(loc_lat))
+ if (length(missing_states) > 0) {
+   warning("These states have no coordinates — their tips will be DROPPED ",
+           "from clade XMLs:\n  ", paste(missing_states, collapse = ", "),
+           "\n  → Add them to the locations data frame to include them.")
+ }
+ 
+ 
+
+## Generate one XML per clade
+ ## filter tip_meta to only samples with a clade assignment
+ tip_meta_assigned <- tip_meta %>% filter(!clade %in% c("Missing", NA_character_))
+ ## get unique clades
+ clades_to_run <- sort(unique(tip_meta_assigned$clade))
+ #cat("Clades to process:", paste(clades_to_run, collapse = ", "), "\n\n")
+ ## loop and write
+ summary_rows <- list()
+ 
+ for (cl in clades_to_run) {
+   tips_in_clade <- tip_meta_assigned %>%
+     filter(clade == cl) %>%
+     pull(sequence_name)
+   cat("── Clade:", cl, " (", length(tips_in_clade), " tips) ──\n")
+   
+   result <- build_clade_xml(
+     clade_name   = cl,
+     clade_tips   = tips_in_clade,
+     tip_meta_df  = tip_meta,
+     taxon_dates  = taxon_dates,
+     seq_seqs     = seq_seqs,
+     loc_lat      = loc_lat,
+     loc_lon      = loc_lon,
+     chain_length = chain_length,
+     log_every    = log_every,
+     save_every   = save_every)
+   
+   if (is.null(result)) next
+   
+   out_file <- file.path(out_dir, paste0(result$file_stem, ".xml"))
+   writeLines(result$xml, out_file, useBytes = TRUE)
+   cat("  → wrote", out_file, "\n")
+   cat("    tips in XML:", result$n_tips,
+       " | dropped (no coords):", result$n_dropped, "\n")
+   
+   summary_rows[[cl]] <- data.frame(
+     clade            = cl,
+     n_tips           = result$n_tips,
+     n_dropped        = result$n_dropped,
+     xml_file         = basename(out_file),
+     stringsAsFactors = FALSE)
+ }
+
+## summary table
+clade_summary <- bind_rows(summary_rows)
+write.csv(clade_summary, file.path(out_dir, "clade_xml_summary.csv"), row.names = FALSE)
+
+remove(doc, taxa_nodes, tree_clade, chain_length, log_every, out_dir, save_every, xml_path, tree_clade_pruned, 
+       missing_clades, missing_in_tree)
+
+
+## part four: output from continuous lat/long diffusion ?? ----
+
+
+
+
+
+## part five: maps ----
 
 ## density of samples from each state
 ## pull table of all unique state names and number of sequences from each, including those with no state
@@ -286,29 +454,8 @@ states <- states %>% filter(!is.na(n_sequences))
 #sum(states$n_sequences)
 states <- states %>% filter(n_sequences>=10)
 
-## hog centers for each state
+## swine centers for each state
 ## pulled just looking at the ESRI map lol will do more formally later
-locations <- data.frame(state = c("Iowa", "Minnesota", "Illinois", 
-                                  "Indiana", "Ohio","North Carolina", 
-                                  "Pennsylvania", "Michigan", "Wisconsin",
-                                  "Kentucky", "Arkansas", "Oklahoma", 
-                                  "Texas", "Missouri","Kansas", 
-                                  "Colorado", "Wyoming", "Utah", 
-                                  "Nebraska","South Dakota"),
-                        lat = c(42.78337081346157, 44.10462846785306, 40.38267144729745,
-                                40.84318098374256, 40.61332295049134, 35.235921,
-                                40.47488269049696, 42.95188067992797, 43.630949241417866,
-                                37.23207623324495, 34.29984836061682, 36.666475839046754,
-                                31.542043656011728, 40.073903437901684, 39.635912212028494,
-                                39.02144609276473, 41.50905940171905, 38.17199803139623,
-                                41.452249465481124, 43.37415915245506),
-                        lon = c(-94.42785719132587, -95.26198230392124, -89.27144699793,
-                                -86.31409432600094, -83.63478335827033, -78.192904,
-                                -76.93887362132278, -85.80965089379956, -90.18386220641291,
-                                -87.14821943859631, -93.87177340330743, -99.81175526572906,
-                                -96.5763615952025, -92.10241780946365, -96.88224256223276,
-                                -102.38996085242769, -104.46263573362431, -113.66328849073699,
-                                -97.28410432335959, -97.48631647186757))
 state_centers <- st_as_sf(locations, coords = c("lon", "lat"), crs = 4326)
 
 US_samples <- ggplot() + geom_sf(data = states, aes(fill = n_sequences)) +
@@ -318,7 +465,5 @@ US_samples <- ggplot() + geom_sf(data = states, aes(fill = n_sequences)) +
 #US_samples
 
 
-
-## attach climate data over time ?
-
+## attach climate data over time to visualize? 
 
