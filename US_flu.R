@@ -2,11 +2,11 @@
 ## phylogeography and ecological predictors of transmission!
 
 
-## part one: BEAST input ----
+## part one: baseline MCC tree ----
 
-source("US_flu_functions.R")
+source("C:/Users/cgait/OneDrive/Desktop/swine flu/US_flu_functions.R")
 
-## part A: BEAST input
+## part one A: BEAST input
 #libraries
 library(ape)
 library(Biostrings)
@@ -29,17 +29,40 @@ library(writexl)
 library(xml2)
 
 
-## import US climate metadata
+## import metadata
 states <- read_sf("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/US_State_Boundaries/US_State_Boundaries.shp")
 ## remove non continental US states
 states <- states %>% filter(NAME!="District of Columbia")
 states <- states %>% filter(NAME!="U.S. Virgin Islands")
 states <- states %>% filter(NAME!="Puerto Rico")
 
-## import clade assignments from BVBRC
-tip_clades <- read.csv("C:/Users/cgait/OneDrive/Desktop/BEAST runs/1990_v1/clade_assignment_updated.csv")
+## monthly average temp from 2010 onward 
+#avg_temp_IL <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/average temp_2010/illinois_avgtemp.csv")
+#avg_temp_IN <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/average temp_2010/indiana_avgtemp.csv")
+avg_temp_IA <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/average temp_2010/iowa_avgtemp.csv")
+#avg_temp_MI <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/average temp_2010/michigan_avgtemp.csv")
+#avg_temp_MN <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/average temp_2010/minnesota_avgtemp.csv")
+#avg_temp_NE <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/average temp_2010/nebraska_avgtemp.csv")
+#avg_temp_NC <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/average temp_2010/northcarolina_avgtemp.csv")
+#avg_temp_OH <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/average temp_2010/ohio_avgtemp.csv")
+#avg_temp_PA <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/average temp_2010/pennsylvania_avgtemp.csv")
+#avg_temp_KS <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/average temp_2010/kansas_avgtemp.csv")
 
-## import combined maximum clade credibility (MCC) tree from TreeAnnotator
+## monthly total rainfall from 2010 onward 
+#rain_IL <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/total precipitation_2010/illinois_rain.csv")
+#rain_IN <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/total precipitation_2010/indiana_rain.csv")
+rain_IA <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/total precipitation_2010/iowa_rain.csv")
+#rain_MI <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/total precipitation_2010/michigan_rain.csv")
+#rain_MN <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/total precipitation_2010/minnesota_rain.csv")
+#rain_NE <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/total precipitation_2010/nebraska_rain.csv")
+#rain_NC <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/total precipitation_2010/northcarolina_rain.csv")
+#rain_OH <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/total precipitation_2010/ohio_rain.csv")
+#rain_PA <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/total precipitation_2010/pennsylvania_rain.csv")
+#rain_KS <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/total precipitation_2010/kansas_rain.csv")
+
+## clade assignments made separately using BV-BRC
+tip_clades <- read.csv("C:/Users/cgait/OneDrive/Desktop/BEAST runs/1990_v1/clade_assignment_updated.csv")
+## combined maximum clade credibility (MCC) tree from TreeAnnotator
 mcc_tree <- read.beast("C:/Users/cgait/OneDrive/Desktop/BEAST runs/1990_v1/mcc_1990_v1_150k.trees")
 options(ignore.negative.edge = TRUE)
 
@@ -203,7 +226,7 @@ tip_meta <- tip_meta %>% mutate(clade = case_when(
 ## once ESS values (excluding coalescent, join & prior if necessary, but ideally all values) are above 200, 
 ## export and combine .trees files using LogCombiner, then put combined tree into TreeAnnotator for the MCC tree
 
-## part two: MCC tree ---- 
+## part one B: MCC tree 
 
 ## prune sequences from 1970s? or just crop tree ??
 #remove_tips <- c("A/swine/Illinois/A00857131/2011|EPI_ISL_121898|A_/_H3N2||||2011-09-24|HA|4")
@@ -266,7 +289,7 @@ tree_clade_pruned <- ggtree(mcc_tree_pruned) %<+% tip_meta +
 #ggsave("C:/Users/cgait/OneDrive/Desktop/clades_pruned.jpeg",width=20,height=25,units=c("cm"),tree_clade_pruned)
 
 
-## part three: XMLs for homogeneous Brownian diffusion ----
+## part two: homogeneous Brownian diffusion ----
 
 ## template XML produced by BEAUTi (contains all 4589 taxa + sequences)
 xml_path  <- "C:/Users/cgait/OneDrive/Desktop/1990_v2/1990_USflu_tree.xml"
@@ -423,16 +446,54 @@ clade_summary <- bind_rows(summary_rows)
 write.csv(clade_summary, file.path(out_dir, "clade_xml_summary.csv"), row.names = FALSE)
 
 remove(doc, taxa_nodes, tree_clade, chain_length, log_every, out_dir, save_every, xml_path, tree_clade_pruned, 
-       missing_clades, missing_in_tree)
+       missing_clades, missing_in_tree, extra_states, cl, result)
 
 
-## part four: output from continuous lat/long diffusion ?? ----
-
-
+## part two B: output from continuous lat/long diffusion ?? 
 
 
 
-## part five: maps ----
+## part three: time-series outcomes ----
+
+## create time-series prevalence data for each clade within each state
+## add a year-month column for grouping
+tip_meta_assigned <- tip_meta_assigned %>% mutate(year_month = floor_date(as.Date(date), "month"))
+
+## overall monthly clade prevalence ---
+overall_prev <- tip_meta_assigned %>% group_by(year_month, clade) %>% 
+  summarise(count = n(), .groups = "drop") %>% group_by(year_month) %>%
+  mutate(total = sum(count), prevalence = count / total) %>% ungroup()
+
+## state-level monthly clade prevalence ---
+state_prev <- tip_meta_assigned %>% group_by(year_month, state, clade) %>%
+  summarise(count = n(), .groups = "drop") %>% group_by(year_month, state) %>% 
+  mutate(total = sum(count), prevalence = count / total) %>% ungroup()
+
+## define the clades and time window of interest
+clades_of_interest <- c("2010.1like", "1990.4.a")
+states_of_interest <- c("Iowa","Nebraska","Missouri","North Carolina")
+date_start <- as.Date("2010-01-01")
+date_end   <- as.Date("2026-12-31")
+
+state_prev_filtered <- state_prev %>%
+  filter(clade %in% clades_of_interest, year_month >= date_start, year_month <= date_end)
+state_prev_filtered <- state_prev_filtered %>% filter(state %in% states_of_interest)
+
+## plot clade prevalence over time in select states
+state_clades <- ggplot(state_prev_filtered,
+       aes(x = year_month, y = prevalence, color = clade)) +
+geom_point(size = 4, alpha = 0.6) + scale_color_manual(values=c("pink3","orange2")) +
+  facet_wrap(~ state, scales = "free_y") +
+  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(title = "Monthly Clade Prevalence by State (2010–2026)",
+       x = "Month", y = "Prevalence (proportion of monthly samples)", color = "Clade") +
+  theme_classic() + theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        strip.text = element_text(face = "bold"))
+state_clades
+
+
+## part four: maps ----
 
 ## density of samples from each state
 ## pull table of all unique state names and number of sequences from each, including those with no state
