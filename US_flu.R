@@ -2,12 +2,11 @@
 ## phylogeography and ecological predictors of transmission!
 
 
-## part one: baseline MCC tree ----
+## part one: data & baseline MCC tree ----
 
 source("C:/Users/cgait/OneDrive/Desktop/swine flu/US_flu_functions.R")
 
 ## part one A: BEAST input
-#libraries
 library(ape)
 library(Biostrings)
 library(dplyr)
@@ -29,36 +28,53 @@ library(writexl)
 library(xml2)
 
 
-## import metadata
+## state-level metadata
 states <- read_sf("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/US_State_Boundaries/US_State_Boundaries.shp")
 ## remove non continental US states
 states <- states %>% filter(NAME!="District of Columbia")
 states <- states %>% filter(NAME!="U.S. Virgin Islands")
 states <- states %>% filter(NAME!="Puerto Rico")
 
-## monthly average temp from 2010 onward 
-#avg_temp_IL <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/average temp_2010/illinois_avgtemp.csv")
-#avg_temp_IN <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/average temp_2010/indiana_avgtemp.csv")
-avg_temp_IA <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/average temp_2010/iowa_avgtemp.csv")
-#avg_temp_MI <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/average temp_2010/michigan_avgtemp.csv")
-#avg_temp_MN <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/average temp_2010/minnesota_avgtemp.csv")
-#avg_temp_NE <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/average temp_2010/nebraska_avgtemp.csv")
-#avg_temp_NC <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/average temp_2010/northcarolina_avgtemp.csv")
-#avg_temp_OH <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/average temp_2010/ohio_avgtemp.csv")
-#avg_temp_PA <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/average temp_2010/pennsylvania_avgtemp.csv")
-#avg_temp_KS <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/average temp_2010/kansas_avgtemp.csv")
+## climate data by state
+base_path <- "C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/"
+state_ids <- c(
+  IL = "illinois",    IN = "indiana",       IA = "iowa",
+  MI = "michigan",    MN = "minnesota",     NE = "nebraska",
+  NC = "northcarolina", OH = "ohio",        PA = "pennsylvania",
+  KS = "kansas",      AZ = "arizona",       AK = "arkansas",
+  CO = "colorado",    KY = "kentucky",      MO = "missouri",
+  MT = "montana",     NM = "newmexico",     OK = "oklahoma",
+  SD = "southdakota", TX = "texas",         UT = "utah",
+  WY = "wyoming")
 
-## monthly total rainfall from 2010 onward 
-#rain_IL <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/total precipitation_2010/illinois_rain.csv")
-#rain_IN <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/total precipitation_2010/indiana_rain.csv")
-rain_IA <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/total precipitation_2010/iowa_rain.csv")
-#rain_MI <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/total precipitation_2010/michigan_rain.csv")
-#rain_MN <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/total precipitation_2010/minnesota_rain.csv")
-#rain_NE <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/total precipitation_2010/nebraska_rain.csv")
-#rain_NC <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/total precipitation_2010/northcarolina_rain.csv")
-#rain_OH <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/total precipitation_2010/ohio_rain.csv")
-#rain_PA <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/total precipitation_2010/pennsylvania_rain.csv")
-#rain_KS <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/total precipitation_2010/kansas_rain.csv")
+## Import monthly average temperature across states
+avg_temp <- lapply(state_ids, function(s) {
+  read.csv(file.path(base_path, "average temp", paste0(s, "_avgtemp.csv")),
+           skip = 2, header = TRUE)
+})
+names(avg_temp) <- names(state_ids)
+
+## Import monthly total rainfall at state level ---
+rain <- lapply(state_ids, function(s) {
+  read.csv(file.path(base_path, "total precipitation", paste0(s, "_rain.csv")),
+           skip = 2, header = TRUE)
+})
+names(rain) <- names(state_ids)
+
+temp_df <- imap_dfr(avg_temp, function(df, abbr) {
+  df$state <- abbr
+  df$year_month <- as.Date(paste0(df$Date, "01"), format = "%Y%m%d")
+  df})
+
+rain_df <- imap_dfr(rain, function(df, abbr) {
+  df$state <- abbr
+  df$year_month <- as.Date(paste0(df$Date, "01"), format = "%Y%m%d")
+  df})
+
+## Filter to match the clade plot time range 
+temp_df <- temp_df %>% filter(year_month >= as.Date("1997-01-01"))
+rain_df <- rain_df %>% filter(year_month >= as.Date("1997-01-01"))
+
 
 ## clade assignments made separately using BV-BRC
 tip_clades <- read.csv("C:/Users/cgait/OneDrive/Desktop/BEAST runs/1990_v1/clade_assignment_updated.csv")
@@ -66,7 +82,7 @@ tip_clades <- read.csv("C:/Users/cgait/OneDrive/Desktop/BEAST runs/1990_v1/clade
 mcc_tree <- read.beast("C:/Users/cgait/OneDrive/Desktop/BEAST runs/1990_v1/mcc_1990_v1_150k.trees")
 options(ignore.negative.edge = TRUE)
 
-# Read the FASTA
+# remove any sequences from the fasta
 #seqs <- readDNAStringSet("C:/Users/cgait/OneDrive/Desktop/BEAST runs/H3N2_2010_v7/gisaid_epiflu_sequence.fasta")
 # Check it's in there
 #grep("A00857131", names(seqs), value = TRUE)
@@ -76,9 +92,7 @@ options(ignore.negative.edge = TRUE)
 #length(seqs) - length(seqs_clean)  # should be 1
 #length(seqs_clean)
 # Write out
-#writeXStringSet(seqs_clean, 
-#                "C:/Users/cgait/OneDrive/Desktop/swine flu/US flu/US_flu_2010/epiflu_HA_2010_clean.fasta")
-
+#writeXStringSet(seqs_clean,"C:/Users/cgait/OneDrive/Desktop/swine flu/US flu/US_flu_2010/epiflu_HA_2010_clean.fasta")
 
 ## align sequences downloaded from GISAID on longleaf using align.flu.sh
 
@@ -98,7 +112,6 @@ options(ignore.negative.edge = TRUE)
 #failed <- date_df[is.na(date_df$date), ]
 # export to tsv to import to BEAUTi
 #write.table(date_df, file = "aligned_HA_1990_dates.txt", sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)  
-
 
 ## N-mask non-ACTGN characters in a FASTA alignment 
 #output_file <- "C:/Users/cgait/OneDrive/Desktop/nmask_aligned_epiflu_HA_2010.fasta"
@@ -379,81 +392,81 @@ loc_lon <- setNames(locations$lon, locations$state)
              -78.170, -80.955))
  
  ## only add states not already in the table
- extra_states <- extra_states[!extra_states$state %in% names(loc_lat), ]
- if (nrow(extra_states) > 0) {
-   cat("Adding centroid coordinates for", nrow(extra_states), "extra states:",
-       paste(extra_states$state, collapse = ", "), "\n")
-   loc_lat <- c(loc_lat, setNames(extra_states$lat, extra_states$state))
-   loc_lon <- c(loc_lon, setNames(extra_states$lon, extra_states$state))
- }
+ #extra_states <- extra_states[!extra_states$state %in% names(loc_lat), ]
+ #if (nrow(extra_states) > 0) {
+#   cat("Adding centroid coordinates for", nrow(extra_states), "extra states:",
+#       paste(extra_states$state, collapse = ", "), "\n")
+#   loc_lat <- c(loc_lat, setNames(extra_states$lat, extra_states$state))
+#   loc_lon <- c(loc_lon, setNames(extra_states$lon, extra_states$state))
+# }
  
  ## ── 2b. Check which states in tip_meta are still un-geocoded ────────────────
- all_states_in_data <- unique(na.omit(tip_meta$state))
- missing_states     <- setdiff(all_states_in_data, names(loc_lat))
- if (length(missing_states) > 0) {
-   warning("These states have no coordinates — their tips will be DROPPED ",
-           "from clade XMLs:\n  ", paste(missing_states, collapse = ", "),
-           "\n  → Add them to the locations data frame to include them.")
- }
+# all_states_in_data <- unique(na.omit(tip_meta$state))
+# missing_states     <- setdiff(all_states_in_data, names(loc_lat))
+# if (length(missing_states) > 0) {
+#   warning("These states have no coordinates — their tips will be DROPPED ",
+#           "from clade XMLs:\n  ", paste(missing_states, collapse = ", "),
+#           "\n  → Add them to the locations data frame to include them.")
+# }
  
  
 
 ## Generate one XML per clade
  ## filter tip_meta to only samples with a clade assignment
- tip_meta_assigned <- tip_meta %>% filter(!clade %in% c("Missing", NA_character_))
+ #tip_meta_assigned <- tip_meta %>% filter(!clade %in% c("Missing", NA_character_))
  ## get unique clades
- clades_to_run <- sort(unique(tip_meta_assigned$clade))
+ #clades_to_run <- sort(unique(tip_meta_assigned$clade))
  #cat("Clades to process:", paste(clades_to_run, collapse = ", "), "\n\n")
  ## loop and write
- summary_rows <- list()
+ #summary_rows <- list()
  
- for (cl in clades_to_run) {
-   tips_in_clade <- tip_meta_assigned %>%
-     filter(clade == cl) %>%
-     pull(sequence_name)
-   cat("── Clade:", cl, " (", length(tips_in_clade), " tips) ──\n")
-   
-   result <- build_clade_xml(
-     clade_name   = cl,
-     clade_tips   = tips_in_clade,
-     tip_meta_df  = tip_meta,
-     taxon_dates  = taxon_dates,
-     seq_seqs     = seq_seqs,
-     loc_lat      = loc_lat,
-     loc_lon      = loc_lon,
-     chain_length = chain_length,
-     log_every    = log_every,
-     save_every   = save_every)
-   
-   if (is.null(result)) next
-   
-   out_file <- file.path(out_dir, paste0(result$file_stem, ".xml"))
-   writeLines(result$xml, out_file, useBytes = TRUE)
-   cat("  → wrote", out_file, "\n")
-   cat("    tips in XML:", result$n_tips,
-       " | dropped (no coords):", result$n_dropped, "\n")
-   
-   summary_rows[[cl]] <- data.frame(
-     clade            = cl,
-     n_tips           = result$n_tips,
-     n_dropped        = result$n_dropped,
-     xml_file         = basename(out_file),
-     stringsAsFactors = FALSE)
- }
+ #for (cl in clades_to_run) {
+#   tips_in_clade <- tip_meta_assigned %>%
+#     filter(clade == cl) %>%
+#     pull(sequence_name)
+#   cat("── Clade:", cl, " (", length(tips_in_clade), " tips) ──\n")
+#   
+#   result <- build_clade_xml(
+#     clade_name   = cl,
+#     clade_tips   = tips_in_clade,
+#     tip_meta_df  = tip_meta,
+#     taxon_dates  = taxon_dates,
+#     seq_seqs     = seq_seqs,
+#     loc_lat      = loc_lat,
+#     loc_lon      = loc_lon,
+#     chain_length = chain_length,
+#     log_every    = log_every,
+#     save_every   = save_every)
+#   
+#   if (is.null(result)) next
+#   
+#   out_file <- file.path(out_dir, paste0(result$file_stem, ".xml"))
+#   writeLines(result$xml, out_file, useBytes = TRUE)
+#   cat("  → wrote", out_file, "\n")
+#   cat("    tips in XML:", result$n_tips,
+#       " | dropped (no coords):", result$n_dropped, "\n")
+#   
+#   summary_rows[[cl]] <- data.frame(
+#     clade            = cl,
+#     n_tips           = result$n_tips,
+#     n_dropped        = result$n_dropped,
+#     xml_file         = basename(out_file),
+#     stringsAsFactors = FALSE)
+# }
 
 ## summary table
-clade_summary <- bind_rows(summary_rows)
-write.csv(clade_summary, file.path(out_dir, "clade_xml_summary.csv"), row.names = FALSE)
+#clade_summary <- bind_rows(summary_rows)
+#write.csv(clade_summary, file.path(out_dir, "clade_xml_summary.csv"), row.names = FALSE)
 
-remove(doc, taxa_nodes, tree_clade, chain_length, log_every, out_dir, save_every, xml_path, tree_clade_pruned, 
-       missing_clades, missing_in_tree, extra_states, cl, result)
+#remove(doc, taxa_nodes, tree_clade, chain_length, log_every, out_dir, save_every, xml_path, tree_clade_pruned, 
+#       missing_clades, missing_in_tree, extra_states, cl, result)
 
 
 ## part two B: output from continuous lat/long diffusion ?? 
 
 
 
-## part three: time-series outcomes ----
+## part three: time-series data ----
 
 ## create time-series prevalence data for each clade within each state
 ## add a year-month column for grouping
@@ -470,28 +483,94 @@ state_prev <- tip_meta_assigned %>% group_by(year_month, state, clade) %>%
   mutate(total = sum(count), prevalence = count / total) %>% ungroup()
 
 ## define the clades and time window of interest
-clades_of_interest <- c("2010.1like", "1990.4.a")
+clades_of_interest <- c("2010.1like", "1990.4.a","1990.1")
 states_of_interest <- c("Iowa","Nebraska","Missouri","North Carolina")
-date_start <- as.Date("2010-01-01")
-date_end   <- as.Date("2026-12-31")
+date_start <- as.Date("1990-01-01")
+date_end   <- as.Date("2026-4-01")
+state_prev_filtered <- state_prev %>% filter(state %in% states_of_interest)
+#state_prev_filtered <- state_prev_filtered %>% filter(clade %in% clades_of_interest)
 
-state_prev_filtered <- state_prev %>%
-  filter(clade %in% clades_of_interest, year_month >= date_start, year_month <= date_end)
-state_prev_filtered <- state_prev_filtered %>% filter(state %in% states_of_interest)
+state_lookup <- c(IA = "Iowa", NE = "Nebraska", MO = "Missouri", NC = "North Carolina")
+temp_df$state <- state_lookup[temp_df$state]
+rain_df$state <- state_lookup[rain_df$state]
+temp_df <- temp_df %>% filter(!is.na(state))
+rain_df <- rain_df %>% filter(!is.na(state))
 
 ## plot clade prevalence over time in select states
-state_clades <- ggplot(state_prev_filtered,
-       aes(x = year_month, y = prevalence, color = clade)) +
-geom_point(size = 4, alpha = 0.6) + scale_color_manual(values=c("pink3","orange2")) +
+## overlay average monthly temperature for these states over the same time?? as a line
+# Choose a scaling factor to map temperature onto the prevalence axis
+# Adjust these if the overlay looks off
+temp_scale <- max(state_prev_filtered$prevalence, na.rm = TRUE) / 
+  max(temp_df$Value, na.rm = TRUE)
+
+state_clades_temp <- ggplot(state_prev_filtered,
+  aes(x = year_month, y = prevalence, color = clade)) +
+  geom_point(size = 3.5, alpha = 0.6) +
+  geom_line(data = temp_df, aes(x = year_month, y = Value * temp_scale, color = NULL),
+            color = "red3", linewidth = 0.5, alpha = 0.5) +
+#  scale_color_manual(values = c("skyblue", "orange2", "pink")) +
   facet_wrap(~ state, scales = "free_y") +
   scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
-  scale_y_continuous(labels = scales::percent_format()) +
-  labs(title = "Monthly Clade Prevalence by State (2010–2026)",
-       x = "Month", y = "Prevalence (proportion of monthly samples)", color = "Clade") +
+  scale_y_continuous(labels = scales::percent_format(),
+    sec.axis = sec_axis(~ . / temp_scale, name = "Avg Temperature (°F)")) +
+  labs(title = "Monthly Clade Prevalence & Temperature by State (1997–2026)",
+       x = "Month", y = "Prevalence", color = "Clade") +
   theme_classic() + theme(axis.text.x = element_text(angle = 45, hjust = 1),
         strip.text = element_text(face = "bold"))
-state_clades
+#state_clades_temp
 
+
+rain_scale <- max(state_prev_filtered$prevalence, na.rm = TRUE) / 
+  max(rain_df$Value, na.rm = TRUE)
+state_clades_rain <- ggplot(state_prev_filtered,
+  aes(x = year_month, y = prevalence, color = clade)) +
+  geom_point(size = 3.5, alpha = 0.6) +
+  geom_line(data = rain_df, aes(x = year_month, y = Value * rain_scale, color = NULL),
+            color = "steelblue", linewidth = 0.5, alpha = 0.5) +
+#  scale_color_manual(values = c("skyblue", "orange2", "pink")) +
+  facet_wrap(~ state, scales = "free_y") +
+  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+  scale_y_continuous(labels = scales::percent_format(),
+    sec.axis = sec_axis(~ . / rain_scale, name = "Total Rainfall (in)")) +
+  labs(title = "Monthly Clade Prevalence & Rainfall by State (1997–2026)",
+       x = "Month", y = "Prevalence", color = "Clade") +
+  theme_classic() + theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        strip.text = element_text(face = "bold"))
+#state_clades_rain
+
+
+## outcome of a new dominant clade over time for each state
+dominant <- state_prev_filtered %>% group_by(state, year_month) %>%
+  slice_max(prevalence, n = 1, with_ties = FALSE) %>%
+  ungroup() %>% arrange(state, year_month) %>% group_by(state) %>%
+  mutate(prev_dominant = lag(clade),new_dominant = ifelse(
+    clade != prev_dominant & !is.na(prev_dominant), 1, 0)) %>% ungroup()
+
+## Check it
+dominant %>% filter(new_dominant == 1) %>% select(state, year_month, prev_dominant, clade)
+shift_events <- dominant %>% filter(new_dominant == 1)
+
+
+state_shifts_rain <- ggplot(state_prev_filtered,
+                            aes(x = year_month, y = prevalence, color = clade)) +
+#  geom_point(size = 3.5, alpha = 0.6) +
+  geom_line(data = rain_df, aes(x = year_month, y = Value * rain_scale, color = NULL),
+            color = "cornflowerblue", linewidth = 0.7, alpha = 0.6) +
+  geom_vline(data = shift_events, aes(xintercept = year_month),
+             color = "pink2", alpha = 0.7) +
+  facet_wrap(~ state, scales = "free_y") +
+  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+  scale_y_continuous(labels = scales::percent_format(),
+                     sec.axis = sec_axis(~ . / rain_scale, name = "Total Rainfall (in)")) +
+  labs(title = "Clade Replacement Events & Rainfall by State",
+       x = "Month", y = "Prevalence", color = "Clade") +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        strip.text = element_text(face = "bold"))
+
+#state_shifts_rain
+
+##save?
 
 ## part four: maps ----
 
