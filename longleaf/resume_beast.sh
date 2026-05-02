@@ -1,46 +1,43 @@
 #!/bin/bash
 # ============================================================================
-#  Resume incomplete BEAST runs
+#  Resume incomplete BEAST runs — US_1990_v2 (12 trees)
 # ============================================================================
-#  This script submits a separate SLURM job for each run that needs resuming.
-#  BEAST's -resume flag picks up from where each run left off.
-#
-#  Current status (from logs):
-#    Run 1:  91.5M    Run 5: 100.0M (done)
-#    Run 2:  93.7M    Run 6:  92.3M
-#    Run 3:  91.4M    Run 7:  73.4M  <- needs extra time
-#    Run 4:  98.6M    Run 8:  35.5M  <- needs extra time
+#  Each tree folder has its own XML and .state file.
+#  Uses -load_state to resume from the saved checkpoint.
 #
 #  Usage: bash resume_beast.sh
 # ============================================================================
 
-BASEDIR="/nas/longleaf/home/franc/swine_flu/BEAST_runs/H3N2_2010_v6"
-XML="epiflu_HA2010_v6.xml"
+BASEDIR="/work/users/f/r/franc/swine_flu/BEAST_runs/US_1990_v2"
+WALLTIME="72:00:00"
 
-# Runs to resume (skip run 5 — already at 100M)
-RUNS=(1 2 3 4 6 7 8)
+# Runs to resume (comment out or remove any that are already done)
+RUNS=(01 02 03 04 05 06 07 08 09 10 11 12)
 
 for RUN in "${RUNS[@]}"; do
     RUNDIR="${BASEDIR}/tree${RUN}"
 
-    # Sanity check
-    if [ ! -f "${RUNDIR}/${XML}" ]; then
-        echo "WARNING: XML not found in ${RUNDIR}, skipping run ${RUN}"
+    # Auto-detect the XML file
+    XML=$(ls "${RUNDIR}"/*.xml 2>/dev/null | head -n 1)
+    if [ -z "$XML" ]; then
+        echo "WARNING: No .xml found in ${RUNDIR}, skipping tree${RUN}"
         continue
     fi
+    XMLBASE=$(basename "$XML")
 
-    # Runs 7 and 8 are further behind — give them the full 7 days
-    if [ "$RUN" -eq 7 ] || [ "$RUN" -eq 8 ]; then
-        WALLTIME="168:00:00"
-    else
-        WALLTIME="72:00:00"
+    # Auto-detect the .state file
+    STATE=$(ls "${RUNDIR}"/*.state 2>/dev/null | head -n 1)
+    if [ -z "$STATE" ]; then
+        echo "WARNING: No .state file found in ${RUNDIR}, skipping tree${RUN}"
+        continue
     fi
+    STATEBASE=$(basename "$STATE")
 
-    echo "Submitting resume for run ${RUN} (walltime: ${WALLTIME})..."
+    echo "Submitting resume for tree${RUN} (xml: ${XMLBASE}, state: ${STATEBASE})..."
 
     sbatch <<EOF
 #!/bin/bash
-#SBATCH --job-name=beast_resume_r${RUN}
+#SBATCH --job-name=beast_resume_t${RUN}
 #SBATCH --output=beast_resume_%j.out
 #SBATCH --error=beast_resume_%j.err
 #SBATCH --time=${WALLTIME}
@@ -53,7 +50,7 @@ for RUN in "${RUNS[@]}"; do
 
 cd ${RUNDIR}
 module load beast/1.10.4
-beast -resume -threads \$SLURM_CPUS_PER_TASK ${XML}
+beast -load_state ${STATEBASE} -force_resume -overwrite -threads \$SLURM_CPUS_PER_TASK ${XMLBASE}
 EOF
 
 done
