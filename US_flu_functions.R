@@ -2,6 +2,9 @@
 
 ## part three: continuous trait diffusion ----
 ## ── 3. Helper: build a single clade XML ─────────────────────────────────────
+## v2: enforced monophyly + uncorrelated log-normal relaxed clock (UCLD)
+##     following Ebola/WNV phylogeography approach (Dudas & Rambaut 2014,
+##     Pybus et al. 2012, Lemey et al. 2010)
 build_clade_xml <- function(clade_name, clade_tips, tip_meta_df,
                             taxon_dates, seq_seqs,
                             loc_lat, loc_lon,
@@ -37,7 +40,7 @@ build_clade_xml <- function(clade_name, clade_tips, tip_meta_df,
   
   if (length(keep) < 3) {
     message("  Skipping clade '", clade_name, "': only ", length(keep),
-            " tips with coordinates (need ≥3).")
+            " tips with coordinates (need >=3).")
     return(invisible(NULL))
   }
   
@@ -47,7 +50,7 @@ build_clade_xml <- function(clade_name, clade_tips, tip_meta_df,
   nchar_aln <- nchar(seq_seqs[keep[1]])
   
   ## ── taxa block ──
-  ## Every taxon gets lat/lon attrs — BEAST will crash without them
+  ## Every taxon gets lat/lon attrs -- BEAST will crash without them
   taxa_lines <- vapply(seq_along(keep), function(i) {
     tid  <- keep[i]
     dval <- taxon_dates[tid]
@@ -69,6 +72,7 @@ build_clade_xml <- function(clade_name, clade_tips, tip_meta_df,
     '<!-- Clade-specific BEAST XML: ', clade_name, ' -->\n',
     '<!-- Generated programmatically from 1990_USflu_tree1.xml -->\n',
     '<!-- ntax=', length(keep), '  (', n_dropped, ' tips dropped for missing coordinates) -->\n',
+    '<!-- v2: enforced monophyly + UCLD relaxed clock -->\n',
     '<beast version="1.10.4">\n',
     '\n',
     
@@ -76,6 +80,14 @@ build_clade_xml <- function(clade_name, clade_tips, tip_meta_df,
     '\t<!-- ntax=', length(keep), ' -->\n',
     '\t<taxa id="taxa">\n',
     paste(taxa_lines, collapse = "\n"), '\n',
+    '\t</taxa>\n\n',
+    
+    ## ── MONOPHYLY: taxon set for the clade ──
+    '\t<!-- Enforce monophyly: all taxa belong to same clade -->\n',
+    '\t<taxa id="clade">\n',
+    paste(vapply(keep, function(tid) {
+      sprintf('\t\t<taxon idref="%s"/>', tid)
+    }, character(1)), collapse = "\n"), '\n',
     '\t</taxa>\n\n',
     
     ## ── ALIGNMENT ──
@@ -127,6 +139,15 @@ build_clade_xml <- function(clade_name, clade_tips, tip_meta_df,
     '\t\t<treeModel idref="treeModel"/>\n',
     '\t</tmrcaStatistic>\n\n',
     
+    ## ── MONOPHYLY STATISTIC ──
+    '\t<!-- Monophyly statistic: constrains clade to be monophyletic -->\n',
+    '\t<tmrcaStatistic id="tmrca(clade)" monophyletic="true">\n',
+    '\t\t<mrca>\n',
+    '\t\t\t<taxa idref="clade"/>\n',
+    '\t\t</mrca>\n',
+    '\t\t<treeModel idref="treeModel"/>\n',
+    '\t</tmrcaStatistic>\n\n',
+    
     ## ── COALESCENT LIKELIHOOD ──
     '\t<coalescentLikelihood id="coalescent">\n',
     '\t\t<model>\n',
@@ -137,18 +158,40 @@ build_clade_xml <- function(clade_name, clade_tips, tip_meta_df,
     '\t\t</populationTree>\n',
     '\t</coalescentLikelihood>\n\n',
     
-    ## ── CLOCK: strict  (swap block below for relaxed if preferred) ──
-    '\t<!-- Strict clock -->\n',
-    '\t<strictClockBranchRates id="branchRates">\n',
-    '\t\t<rate>\n',
-    '\t\t\t<parameter id="clock.rate" value="1.0" lower="0.0"/>\n',
-    '\t\t</rate>\n',
-    '\t</strictClockBranchRates>\n\n',
+    ## ── CLOCK: uncorrelated log-normal relaxed clock (UCLD) ──
+    '\t<!-- Uncorrelated log-normal relaxed clock (Drummond et al. 2006) -->\n',
+    '\t<discretizedBranchRates id="branchRates">\n',
+    '\t\t<treeModel idref="treeModel"/>\n',
+    '\t\t<distribution>\n',
+    '\t\t\t<logNormalDistributionModel meanInRealSpace="true">\n',
+    '\t\t\t\t<mean>\n',
+    '\t\t\t\t\t<parameter id="ucld.mean" value="0.004" lower="0.0"/>\n',
+    '\t\t\t\t</mean>\n',
+    '\t\t\t\t<stdev>\n',
+    '\t\t\t\t\t<parameter id="ucld.stdev" value="0.3333" lower="0.0"/>\n',
+    '\t\t\t\t</stdev>\n',
+    '\t\t\t</logNormalDistributionModel>\n',
+    '\t\t</distribution>\n',
+    '\t\t<rateCategories>\n',
+    '\t\t\t<parameter id="branchRates.categories"/>\n',
+    '\t\t</rateCategories>\n',
+    '\t</discretizedBranchRates>\n\n',
     
     '\t<rateStatistic id="meanRate" name="meanRate" mode="mean" internal="true" external="true">\n',
     '\t\t<treeModel idref="treeModel"/>\n',
-    '\t\t<strictClockBranchRates idref="branchRates"/>\n',
+    '\t\t<discretizedBranchRates idref="branchRates"/>\n',
     '\t</rateStatistic>\n\n',
+    
+    '\t<rateStatistic id="coefficientOfVariation" name="coefficientOfVariation"\n',
+    '\t\t\tmode="coefficientOfVariation" internal="true" external="true">\n',
+    '\t\t<treeModel idref="treeModel"/>\n',
+    '\t\t<discretizedBranchRates idref="branchRates"/>\n',
+    '\t</rateStatistic>\n\n',
+    
+    '\t<rateCovarianceStatistic id="covariance" name="covariance">\n',
+    '\t\t<treeModel idref="treeModel"/>\n',
+    '\t\t<discretizedBranchRates idref="branchRates"/>\n',
+    '\t</rateCovarianceStatistic>\n\n',
     
     ## ── SUBSTITUTION MODEL: HKY ──
     '\t<HKYModel id="hky">\n',
@@ -177,7 +220,7 @@ build_clade_xml <- function(clade_name, clade_tips, tip_meta_df,
     '\t\t\t<siteModel idref="siteModel"/>\n',
     '\t\t</partition>\n',
     '\t\t<treeModel idref="treeModel"/>\n',
-    '\t\t<strictClockBranchRates idref="branchRates"/>\n',
+    '\t\t<discretizedBranchRates idref="branchRates"/>\n',
     '\t</treeDataLikelihood>\n\n',
     
     ## ── CONTINUOUS TRAIT: multivariate diffusion for lat/lon ──
@@ -213,23 +256,47 @@ build_clade_xml <- function(clade_name, clade_tips, tip_meta_df,
     
     ## ── OPERATORS ──
     '\t<operators id="operators" optimizationSchedule="default">\n',
+    
+    ## substitution model operators
     '\t\t<scaleOperator scaleFactor="0.75" weight="1">\n',
     '\t\t\t<parameter idref="kappa"/>\n',
     '\t\t</scaleOperator>\n',
     '\t\t<deltaExchange delta="0.01" weight="1">\n',
     '\t\t\t<parameter idref="frequencies"/>\n',
     '\t\t</deltaExchange>\n',
+    
+    ## UCLD operators
+    '\t\t<!-- UCLD relaxed clock operators -->\n',
     '\t\t<scaleOperator scaleFactor="0.75" weight="3">\n',
-    '\t\t\t<parameter idref="clock.rate"/>\n',
+    '\t\t\t<parameter idref="ucld.mean"/>\n',
     '\t\t</scaleOperator>\n',
+    '\t\t<scaleOperator scaleFactor="0.75" weight="3">\n',
+    '\t\t\t<parameter idref="ucld.stdev"/>\n',
+    '\t\t</scaleOperator>\n',
+    
+    ## up-down: scale tree heights up while scaling ucld.mean down (critical for mixing)
     '\t\t<upDownOperator scaleFactor="0.75" weight="3">\n',
     '\t\t\t<up>\n',
     '\t\t\t\t<parameter idref="treeModel.allInternalNodeHeights"/>\n',
     '\t\t\t</up>\n',
     '\t\t\t<down>\n',
-    '\t\t\t\t<parameter idref="clock.rate"/>\n',
+    '\t\t\t\t<parameter idref="ucld.mean"/>\n',
     '\t\t\t</down>\n',
     '\t\t</upDownOperator>\n',
+    
+    ## rate category operators (swap & random walk on integer categories)
+    '\t\t<swapOperator size="1" weight="10" autoOptimize="false">\n',
+    '\t\t\t<parameter idref="branchRates.categories"/>\n',
+    '\t\t</swapOperator>\n',
+    '\t\t<randomWalkIntegerOperator windowSize="1" weight="10">\n',
+    '\t\t\t<parameter idref="branchRates.categories"/>\n',
+    '\t\t</randomWalkIntegerOperator>\n',
+    '\t\t<uniformIntegerOperator weight="10">\n',
+    '\t\t\t<parameter idref="branchRates.categories"/>\n',
+    '\t\t</uniformIntegerOperator>\n',
+    
+    ## tree topology operators
+    '\t\t<!-- Tree operators -->\n',
     '\t\t<subtreeSlide size="1.0" gaussian="true" weight="30">\n',
     '\t\t\t<treeModel idref="treeModel"/>\n',
     '\t\t</subtreeSlide>\n',
@@ -248,12 +315,16 @@ build_clade_xml <- function(clade_name, clade_tips, tip_meta_df,
     '\t\t<uniformOperator weight="30">\n',
     '\t\t\t<parameter idref="treeModel.internalNodeHeights"/>\n',
     '\t\t</uniformOperator>\n',
+    
+    ## coalescent operators
     '\t\t<scaleOperator scaleFactor="0.75" weight="3">\n',
     '\t\t\t<parameter idref="exponential.popSize"/>\n',
     '\t\t</scaleOperator>\n',
     '\t\t<randomWalkOperator windowSize="1.0" weight="3">\n',
     '\t\t\t<parameter idref="exponential.growthRate"/>\n',
     '\t\t</randomWalkOperator>\n',
+    
+    ## continuous trait operators
     '\t\t<!-- Continuous trait operators -->\n',
     '\t\t<precisionGibbsOperator weight="2">\n',
     '\t\t\t<multivariateTraitLikelihood idref="location.traitLikelihood"/>\n',
@@ -276,18 +347,28 @@ build_clade_xml <- function(clade_name, clade_tips, tip_meta_df,
     '\t\t  operatorAnalysis="', file_stem, '.ops.txt">\n',
     '\t\t<joint id="joint">\n',
     '\t\t\t<prior id="prior">\n',
+    
+    ## -- priors --
     '\t\t\t\t<logNormalPrior mu="1.0" sigma="1.25" offset="0.0">\n',
     '\t\t\t\t\t<parameter idref="kappa"/>\n',
     '\t\t\t\t</logNormalPrior>\n',
     '\t\t\t\t<dirichletPrior alpha="1.0" sumsTo="1.0">\n',
     '\t\t\t\t\t<parameter idref="frequencies"/>\n',
     '\t\t\t\t</dirichletPrior>\n',
+    
+    ## UCLD priors: CTMC reference prior on ucld.mean, exponential on ucld.stdev
+    '\t\t\t\t<!-- UCLD relaxed clock priors -->\n',
     '\t\t\t\t<ctmcScalePrior>\n',
     '\t\t\t\t\t<ctmcScale>\n',
-    '\t\t\t\t\t\t<parameter idref="clock.rate"/>\n',
+    '\t\t\t\t\t\t<parameter idref="ucld.mean"/>\n',
     '\t\t\t\t\t</ctmcScale>\n',
     '\t\t\t\t\t<treeModel idref="treeModel"/>\n',
     '\t\t\t\t</ctmcScalePrior>\n',
+    '\t\t\t\t<exponentialPrior mean="0.3333" offset="0.0">\n',
+    '\t\t\t\t\t<parameter idref="ucld.stdev"/>\n',
+    '\t\t\t\t</exponentialPrior>\n',
+    
+    ## coalescent priors
     '\t\t\t\t<oneOnXPrior>\n',
     '\t\t\t\t\t<parameter idref="exponential.popSize"/>\n',
     '\t\t\t\t</oneOnXPrior>\n',
@@ -295,8 +376,21 @@ build_clade_xml <- function(clade_name, clade_tips, tip_meta_df,
     '\t\t\t\t\t<parameter idref="exponential.growthRate"/>\n',
     '\t\t\t\t</laplacePrior>\n',
     '\t\t\t\t<coalescentLikelihood idref="coalescent"/>\n',
+    
+    ## continuous trait prior
     '\t\t\t\t<multivariateWishartPrior idref="location.precisionPrior"/>\n',
-    '\t\t\t\t<strictClockBranchRates idref="branchRates"/>\n',
+    
+    ## monophyly enforcement (hard constraint via booleanLikelihood)
+    '\t\t\t\t<!-- Enforce monophyly of the clade -->\n',
+    '\t\t\t\t<booleanLikelihood>\n',
+    '\t\t\t\t\t<monophylyStatistic id="monophyly(clade)">\n',
+    '\t\t\t\t\t\t<mrca>\n',
+    '\t\t\t\t\t\t\t<taxa idref="clade"/>\n',
+    '\t\t\t\t\t\t</mrca>\n',
+    '\t\t\t\t\t\t<treeModel idref="treeModel"/>\n',
+    '\t\t\t\t\t</monophylyStatistic>\n',
+    '\t\t\t\t</booleanLikelihood>\n',
+    
     '\t\t\t</prior>\n',
     '\t\t\t<likelihood id="likelihood">\n',
     '\t\t\t\t<treeDataLikelihood idref="treeLikelihood"/>\n',
@@ -319,8 +413,8 @@ build_clade_xml <- function(clade_name, clade_tips, tip_meta_df,
     '\t\t\t<column label="age(root)" sf="6" width="12">\n',
     '\t\t\t\t<tmrcaStatistic idref="age(root)"/>\n',
     '\t\t\t</column>\n',
-    '\t\t\t<column label="clock.rate" sf="6" width="12">\n',
-    '\t\t\t\t<parameter idref="clock.rate"/>\n',
+    '\t\t\t<column label="ucld.mean" sf="6" width="12">\n',
+    '\t\t\t\t<parameter idref="ucld.mean"/>\n',
     '\t\t\t</column>\n',
     '\t\t</log>\n\n',
     
@@ -331,15 +425,18 @@ build_clade_xml <- function(clade_name, clade_tips, tip_meta_df,
     '\t\t\t<likelihood idref="likelihood"/>\n',
     '\t\t\t<parameter idref="treeModel.rootHeight"/>\n',
     '\t\t\t<tmrcaStatistic idref="age(root)"/>\n',
+    '\t\t\t<tmrcaStatistic idref="tmrca(clade)"/>\n',
     '\t\t\t<treeLengthStatistic idref="treeLength"/>\n',
     '\t\t\t<parameter idref="exponential.popSize"/>\n',
     '\t\t\t<parameter idref="exponential.growthRate"/>\n',
     '\t\t\t<parameter idref="kappa"/>\n',
     '\t\t\t<parameter idref="frequencies"/>\n',
-    '\t\t\t<parameter idref="clock.rate"/>\n',
+    '\t\t\t<parameter idref="ucld.mean"/>\n',
+    '\t\t\t<parameter idref="ucld.stdev"/>\n',
     '\t\t\t<rateStatistic idref="meanRate"/>\n',
+    '\t\t\t<rateStatistic idref="coefficientOfVariation"/>\n',
+    '\t\t\t<rateCovarianceStatistic idref="covariance"/>\n',
     '\t\t\t<treeDataLikelihood idref="treeLikelihood"/>\n',
-    '\t\t\t<strictClockBranchRates idref="branchRates"/>\n',
     '\t\t\t<coalescentLikelihood idref="coalescent"/>\n',
     '\t\t\t<multivariateTraitLikelihood idref="location.traitLikelihood"/>\n',
     '\t\t\t<matrixParameter idref="location.precision"/>\n',
@@ -350,7 +447,7 @@ build_clade_xml <- function(clade_name, clade_tips, tip_meta_df,
     '\t\t\t\t fileName="', file_stem, '.trees.txt" sortTranslationTable="true">\n',
     '\t\t\t<treeModel idref="treeModel"/>\n',
     '\t\t\t<trait name="rate" tag="rate">\n',
-    '\t\t\t\t<strictClockBranchRates idref="branchRates"/>\n',
+    '\t\t\t\t<discretizedBranchRates idref="branchRates"/>\n',
     '\t\t\t</trait>\n',
     '\t\t\t<multivariateTraitLikelihood idref="location.traitLikelihood"/>\n',
     '\t\t\t<joint idref="joint"/>\n',

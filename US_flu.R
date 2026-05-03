@@ -1,7 +1,6 @@
 ## H3N2 influenza A transmission among domestic swine in the US
 ## phylogeography and ecological predictors of transmission!
 
-
 ## part one: data & baseline MCC tree ----
 
 source("C:/Users/cgait/OneDrive/Desktop/swine flu/US_flu_functions.R")
@@ -10,22 +9,33 @@ source("C:/Users/cgait/OneDrive/Desktop/swine flu/US_flu_functions.R")
 library(ape)
 library(Biostrings)
 library(dplyr)
+library(ggplot2)
 library(ggtree)
 library(lubridate)
+library(MASS)
 library(msa)
 library(paletteer)
 library(Polychrome)
 library(phangorn)
 library(readxl)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(scales)
 library(scico)
+#library(seraphim)
 library(sf)
 library(ShortRead)
 library(stringr)
+library(terra)
 library(tidyverse)
 library(treeio)
 library(viridis)
 library(writexl)
 library(xml2)
+
+
+
+
 
 
 ## state-level metadata
@@ -77,71 +87,14 @@ rain_df <- rain_df %>% filter(year_month >= as.Date("1997-01-01"))
 
 
 ## clade assignments made separately using BV-BRC
-tip_clades <- read.csv("C:/Users/cgait/OneDrive/Desktop/BEAST runs/1990_v1/clade_assignment_updated.csv")
+tip_clades <- read.csv("C:/Users/cgait/OneDrive/Desktop/BEAST runs/1990 US flu/1990_v1/clade_assignment_updated.csv")
 ## combined maximum clade credibility (MCC) tree from TreeAnnotator
-mcc_tree <- read.beast("C:/Users/cgait/OneDrive/Desktop/BEAST runs/1990_v1/mcc_1990_v1_150k.trees")
+mcc_tree <- read.beast("C:/Users/cgait/OneDrive/Desktop/BEAST runs/1990 US flu/1990_v1/mcc_1990_v1_150k.trees")
 options(ignore.negative.edge = TRUE)
 
-# remove any sequences from the fasta
-#seqs <- readDNAStringSet("C:/Users/cgait/OneDrive/Desktop/BEAST runs/H3N2_2010_v7/gisaid_epiflu_sequence.fasta")
-# Check it's in there
-#grep("A00857131", names(seqs), value = TRUE)
-# Remove it
-#seqs_clean <- seqs[!grepl("A00857131", names(seqs))]
-# Verify
-#length(seqs) - length(seqs_clean)  # should be 1
-#length(seqs_clean)
-# Write out
-#writeXStringSet(seqs_clean,"C:/Users/cgait/OneDrive/Desktop/swine flu/US flu/US_flu_2010/epiflu_HA_2010_clean.fasta")
 
-## align sequences downloaded from GISAID on longleaf using align.flu.sh
-
-## pull and reattach sequence dates from the aligned fasta, as BEAUTi is struggling to parse
-#fasta_file <- "C:/Users/cgait/OneDrive/Desktop/BEAST runs/1990 US flu/v1/H3_aligned_deduped_nmask_final.fasta"
-# Read lines
-#lines <- readLines(fasta_file)
-# Extract header lines only
-#headers <- lines[startsWith(lines, ">")]
-# Strip the leading ">"
-#seq_names <- sub("^>", "", headers)
-# Extract dates using regex (YYYY-MM-DD pattern) 
-#dates <- str_extract(seq_names, "\\d{4}-\\d{2}-\\d{2}")
-# Build summary table 
-#date_df <- data.frame(sequence_name = seq_names, date = dates, stringsAsFactors = FALSE)
-# Check for any sequences where date couldn't be parsed
-#failed <- date_df[is.na(date_df$date), ]
-# export to tsv to import to BEAUTi
-#write.table(date_df, file = "aligned_HA_1990_dates.txt", sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)  
-
-## N-mask non-ACTGN characters in a FASTA alignment 
-#output_file <- "C:/Users/cgait/OneDrive/Desktop/nmask_aligned_epiflu_HA_2010.fasta"
-#lines <- readLines(fasta_file)
-#masked_lines <- character(length(lines))
-
-#for (i in seq_along(lines)) {
-#  if (startsWith(lines[i], ">")) {
-#    # Header line — keep as-is
-#    masked_lines[i] <- lines[i]
-#  } else {
-#    # Sequence line — uppercase first, then replace anything not ACTGN with N
-#    seq <- toupper(lines[i])
-#    seq <- gsub("[^ACTGN]", "N", seq)
-#    masked_lines[i] <- seq
-#  }
-#}
-
-#writeLines(masked_lines, output_file)
-
-# Quick summary of what was changed
-#original_seqs <- toupper(paste(lines[!startsWith(lines, ">")], collapse = ""))
-#masked_seqs   <- paste(masked_lines[!startsWith(masked_lines, ">")], collapse = "")
-
-#n_original <- nchar(gsub("[ACTGN]", "", original_seqs))
-#cat("Total characters replaced with N:", n_original, "\n")
-
-
-## import & clean metadata
-tip_dates <- read.table("C:/Users/cgait/OneDrive/Desktop/BEAST runs/1990_v1/aligned_HA_1990_dates.txt",
+## tip/taxa metadata
+tip_dates <- read.table("C:/Users/cgait/OneDrive/Desktop/BEAST runs/1990 US flu/1990_v1/aligned_HA_1990_dates.txt",
                         header = TRUE, sep = "\t")
 tip_dates$date <- as.Date(tip_dates$date)
 tip_meta <- tip_dates
@@ -199,13 +152,6 @@ tip_meta <- tip_meta %>% mutate(region = case_when(
     state %in% c("Maryland", "New York", "Pennsylvania") ~ "Northeast",
     is.na(state) ~ NA_character_))
 
-#table(tip_meta$region, useNA = "always")
-
-## filter out states with under 5 sequences
-#tip_meta <- tip_meta %>% mutate(state = case_when( state %in% c("Arizona","Florida","Georgia","Louisiana",
-#               "New York","New Mexico","Oregon","South Carolina","Tennessee","West Virginia") ~ NA, 
-#               TRUE ~ state))
-#table(tip_meta$state, useNA="always")
 
 # Create complete metadata for all tree tips
 all_tree_tips <- data.frame(sequence_name = mcc_tree@phylo$tip.label)
@@ -268,7 +214,6 @@ tree_clade <- ggtree(mcc_tree) %<+% tip_meta +
   theme_tree2() + coord_cartesian(xlim = c(1990, 2033)) +
   theme(legend.position = "right", legend.text = element_text(size = 12),
         legend.key.size = unit(0.8, "cm")) + guides(color = guide_legend(ncol = 1))
-
 #tree_clade
 
 # See how many sequences match between tree and clade assignments
@@ -297,17 +242,16 @@ tree_clade_pruned <- ggtree(mcc_tree_pruned) %<+% tip_meta +
   theme(legend.position = "right", legend.text = element_text(size = 12),
         legend.key.size = unit(0.8, "cm")) +
   guides(color = guide_legend(ncol = 1))
-
 #tree_clade_pruned
 #ggsave("C:/Users/cgait/OneDrive/Desktop/clades_pruned.jpeg",width=20,height=25,units=c("cm"),tree_clade_pruned)
 
 
-## part two: homogeneous Brownian diffusion ----
+## part two: random-walk diffusion xmls ----
 
 ## template XML produced by BEAUTi (contains all 4589 taxa + sequences)
 xml_path  <- "C:/Users/cgait/OneDrive/Desktop/1990_v2/1990_USflu_tree.xml"
-out_dir   <- "C:/Users/cgait/OneDrive/Desktop/1990_v2/clade_xmls"
-dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+out_dir   <- "C:/Users/cgait/OneDrive/Desktop/clade_xmls"
+#dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
 ## MCMC settings (adjust as needed)
 chain_length   <- 100000000   # 100 million
@@ -344,7 +288,7 @@ names(seq_seqs) <- seq_ids
              "Pennsylvania","Michigan","Wisconsin","Kentucky","Arkansas",
              "Oklahoma","Texas","Missouri","Kansas","Colorado","Wyoming",
              "Utah","Nebraska","South Dakota",
-             ## ── states added to cover all tips ──
+             ## fewer than 10 sequences per state
              "Alabama","Arizona","California","Florida","Georgia",
              "Louisiana","Maryland","Montana","New Mexico","New York",
              "North Dakota","Oregon","South Carolina","Tennessee",
@@ -353,7 +297,6 @@ names(seq_seqs) <- seq_ids
            40.475, 42.952, 43.631, 37.232, 34.300, 36.666,
            31.542, 40.074, 39.636, 39.021, 41.509, 38.172,
            41.452, 43.374,
-           ## ── added states ──
            32.806,  34.048,  36.778,  27.995,  33.040,
            31.169,  39.046,  46.813,  34.840,  42.165,
            47.528,  44.572,  33.836,  35.518,
@@ -362,65 +305,34 @@ names(seq_seqs) <- seq_ids
            -76.939, -85.810, -90.184, -87.148, -93.872, -99.812,
            -96.576, -92.102, -96.882, -102.390, -104.463, -113.663,
            -97.284, -97.486,
-           ## ── added states ──
            -86.791, -111.094, -119.418, -81.760, -83.644,
            -91.867,  -76.641, -110.362, -106.249, -74.949,
            -99.784, -122.071,  -81.164, -86.580,
            -78.170,  -80.955))
-
+#write_xlsx(locations, "C:/Users/cgait/OneDrive/Desktop/locations.xlsx")
 
 ## Build a named-vector lookup  state → c(lat, lon)
 loc_lat <- setNames(locations$lat, locations$state)
 loc_lon <- setNames(locations$lon, locations$state)
  
-
- ## Expand locations to cover ALL states that appear in tip_meta.
- ## These are approximate state centroids — update with your swine center
- ## coordinates once you have them for these states.
- extra_states <- data.frame(
-   state = c("Alabama","Arizona","California","Florida","Georgia",
-             "Louisiana","Maryland","Montana","New Mexico","New York",
-             "North Dakota","Oregon","South Carolina","Tennessee",
-             "Virginia","West Virginia"),
-   lat   = c(32.806, 34.048, 36.778, 27.995, 33.040,
-             31.169, 39.046, 46.813, 34.840, 42.165,
-             47.528, 44.572, 33.836, 35.518,
-             37.769, 38.468),
-   lon   = c(-86.791, -111.094, -119.418, -81.760, -83.644,
-             -91.867, -76.641, -110.362, -106.249, -74.949,
-             -99.784, -122.071, -81.164, -86.580,
-             -78.170, -80.955))
+ ## Check which states in tip_meta are still un-geocoded 
+ all_states_in_data <- unique(na.omit(tip_meta$state))
+ missing_states     <- setdiff(all_states_in_data, names(loc_lat))
+ if (length(missing_states) > 0) {
+   warning("These states have no coordinates — their tips will be DROPPED ",
+           "from clade XMLs:\n  ", paste(missing_states, collapse = ", "),
+           "\n  → Add them to the locations data frame to include them.")
+ }
  
- ## only add states not already in the table
- #extra_states <- extra_states[!extra_states$state %in% names(loc_lat), ]
- #if (nrow(extra_states) > 0) {
-#   cat("Adding centroid coordinates for", nrow(extra_states), "extra states:",
-#       paste(extra_states$state, collapse = ", "), "\n")
-#   loc_lat <- c(loc_lat, setNames(extra_states$lat, extra_states$state))
-#   loc_lon <- c(loc_lon, setNames(extra_states$lon, extra_states$state))
-# }
- 
- ## ── 2b. Check which states in tip_meta are still un-geocoded ────────────────
-# all_states_in_data <- unique(na.omit(tip_meta$state))
-# missing_states     <- setdiff(all_states_in_data, names(loc_lat))
-# if (length(missing_states) > 0) {
-#   warning("These states have no coordinates — their tips will be DROPPED ",
-#           "from clade XMLs:\n  ", paste(missing_states, collapse = ", "),
-#           "\n  → Add them to the locations data frame to include them.")
-# }
- 
- 
-
 ## Generate one XML per clade
- ## filter tip_meta to only samples with a clade assignment
- #tip_meta_assigned <- tip_meta %>% filter(!clade %in% c("Missing", NA_character_))
- ## get unique clades
- #clades_to_run <- sort(unique(tip_meta_assigned$clade))
- #cat("Clades to process:", paste(clades_to_run, collapse = ", "), "\n\n")
- ## loop and write
- #summary_rows <- list()
- 
- #for (cl in clades_to_run) {
+## filter tip_meta to only samples with a clade assignment
+tip_meta_assigned <- tip_meta %>% filter(!clade %in% c("Missing", NA_character_))
+## get unique clades
+#clades_to_run <- sort(unique(tip_meta_assigned$clade))
+#cat("Clades to process:", paste(clades_to_run, collapse = ", "), "\n\n")
+## loop and write
+#summary_rows <- list()
+#for (cl in clades_to_run) {
 #   tips_in_clade <- tip_meta_assigned %>%
 #     filter(clade == cl) %>%
 #     pull(sequence_name)
@@ -437,9 +349,8 @@ loc_lon <- setNames(locations$lon, locations$state)
 #     chain_length = chain_length,
 #     log_every    = log_every,
 #     save_every   = save_every)
-#   
+#  
 #   if (is.null(result)) next
-#   
 #   out_file <- file.path(out_dir, paste0(result$file_stem, ".xml"))
 #   writeLines(result$xml, out_file, useBytes = TRUE)
 #   cat("  → wrote", out_file, "\n")
@@ -458,11 +369,16 @@ loc_lon <- setNames(locations$lon, locations$state)
 #clade_summary <- bind_rows(summary_rows)
 #write.csv(clade_summary, file.path(out_dir, "clade_xml_summary.csv"), row.names = FALSE)
 
-#remove(doc, taxa_nodes, tree_clade, chain_length, log_every, out_dir, save_every, xml_path, tree_clade_pruned, 
-#       missing_clades, missing_in_tree, extra_states, cl, result)
+remove(doc, taxa_nodes, tree_clade, chain_length, log_every, out_dir, save_every, xml_path, tree_clade_pruned, 
+       missing_clades, missing_in_tree, extra_states, cl, result, rain, avg_temp)
 
 
-## part two B: output from continuous lat/long diffusion ?? 
+## part two B: continuous-relaxed-random-walk surface
+
+
+
+## part two C: branch-vector plot?
+## cumulative Euclidean displacement vs phylogenetic distance from root/node age proxy
 
 
 
@@ -497,28 +413,8 @@ temp_df <- temp_df %>% filter(!is.na(state))
 rain_df <- rain_df %>% filter(!is.na(state))
 
 ## plot clade prevalence over time in select states
-## overlay average monthly temperature for these states over the same time?? as a line
+## overlay monthly rainfall for these states over the same time?? as a line
 # Choose a scaling factor to map temperature onto the prevalence axis
-# Adjust these if the overlay looks off
-temp_scale <- max(state_prev_filtered$prevalence, na.rm = TRUE) / 
-  max(temp_df$Value, na.rm = TRUE)
-
-state_clades_temp <- ggplot(state_prev_filtered,
-  aes(x = year_month, y = prevalence, color = clade)) +
-  geom_point(size = 3.5, alpha = 0.6) +
-  geom_line(data = temp_df, aes(x = year_month, y = Value * temp_scale, color = NULL),
-            color = "red3", linewidth = 0.5, alpha = 0.5) +
-#  scale_color_manual(values = c("skyblue", "orange2", "pink")) +
-  facet_wrap(~ state, scales = "free_y") +
-  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
-  scale_y_continuous(labels = scales::percent_format(),
-    sec.axis = sec_axis(~ . / temp_scale, name = "Avg Temperature (°F)")) +
-  labs(title = "Monthly Clade Prevalence & Temperature by State (1997–2026)",
-       x = "Month", y = "Prevalence", color = "Clade") +
-  theme_classic() + theme(axis.text.x = element_text(angle = 45, hjust = 1),
-        strip.text = element_text(face = "bold"))
-#state_clades_temp
-
 
 rain_scale <- max(state_prev_filtered$prevalence, na.rm = TRUE) / 
   max(rain_df$Value, na.rm = TRUE)
@@ -547,25 +443,18 @@ dominant <- state_prev_filtered %>% group_by(state, year_month) %>%
     clade != prev_dominant & !is.na(prev_dominant), 1, 0)) %>% ungroup()
 
 ## Check it
-dominant %>% filter(new_dominant == 1) %>% select(state, year_month, prev_dominant, clade)
+#dominant %>% filter(new_dominant == 1) %>% select(state, year_month, prev_dominant, clade)
 shift_events <- dominant %>% filter(new_dominant == 1)
 
-
-state_shifts_rain <- ggplot(state_prev_filtered,
-                            aes(x = year_month, y = prevalence, color = clade)) +
-#  geom_point(size = 3.5, alpha = 0.6) +
+state_shifts_rain <- ggplot(state_prev_filtered, aes(x = year_month, y = prevalence, color = clade)) +
   geom_line(data = rain_df, aes(x = year_month, y = Value * rain_scale, color = NULL),
             color = "cornflowerblue", linewidth = 0.7, alpha = 0.6) +
-  geom_vline(data = shift_events, aes(xintercept = year_month),
-             color = "pink2", alpha = 0.7) +
-  facet_wrap(~ state, scales = "free_y") +
-  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+  geom_vline(data = shift_events, aes(xintercept = year_month), color = "pink2", alpha = 0.7) +
+  facet_wrap(~ state, scales = "free_y") + scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
   scale_y_continuous(labels = scales::percent_format(),
                      sec.axis = sec_axis(~ . / rain_scale, name = "Total Rainfall (in)")) +
-  labs(title = "Clade Replacement Events & Rainfall by State",
-       x = "Month", y = "Prevalence", color = "Clade") +
-  theme_classic() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+  labs(title = "Clade Replacement Events & Rainfall by State", x="Month", y="Prevalence", color="Clade") +
+  theme_classic() + theme(axis.text.x = element_text(angle = 45, hjust = 1),
         strip.text = element_text(face = "bold"))
 
 #state_shifts_rain
@@ -591,8 +480,7 @@ states <- states %>% filter(state != "Hawaii")
 
 ## filter states for inclusion
 states <- states %>% filter(!is.na(n_sequences))
-#sum(states$n_sequences)
-states <- states %>% filter(n_sequences>=10)
+#states <- states %>% filter(n_sequences>=10)
 
 ## swine centers for each state
 ## pulled just looking at the ESRI map lol will do more formally later
@@ -605,5 +493,69 @@ US_samples <- ggplot() + geom_sf(data = states, aes(fill = n_sequences)) +
 #US_samples
 
 
-## attach climate data over time to visualize? 
+## continuous diffusion surfaces within subclades??
+tree_file <- "C:/Users/cgait/OneDrive/Desktop/1990_1990.4.a_v2/mcc_1990.4.a_v2.trees"
+mcc_1990.4.a <- read.beast(tree_file)
+
+node_data <- as_tibble(mcc_1990.4.a)
+lat_col <- "location1"   # latitude  
+lon_col <- "location2"   # longitude 
+
+## extract node coordinates
+coords <- node_data %>% filter(!is.na(.data[[lat_col]]), !is.na(.data[[lon_col]])) %>%
+  mutate(lat = as.numeric(.data[[lat_col]]), lon = as.numeric(.data[[lon_col]])) %>%
+  dplyr::select(node, label, lat, lon, height)  # explicitly call dplyr::select
+#cat(sprintf("\nExtracted %d nodes with coordinates\n", nrow(coords)))
+#cat(sprintf("Lat range: %.2f to %.2f\n", min(coords$lat), max(coords$lat)))
+#cat(sprintf("Lon range: %.2f to %.2f\n", min(coords$lon), max(coords$lon)))
+
+## build branch line segments (for tree overlay) 
+# Get parent-child relationships with coordinates
+tree_tbl <- as_tibble(mcc_1990.4.a)
+
+branch_lines <- tree_tbl %>% filter(!is.na(parent)) %>% left_join(coords %>% dplyr::select(node, lat, lon),
+  by = "node") %>% left_join(coords %>% dplyr::select(node, parent_lat = lat, parent_lon = lon),
+    by = c("parent" = "node")) %>% filter(!is.na(lat), !is.na(parent_lat))
+
+## COMPUTE KDE SURFACE 
+# Expand map bounds slightly beyond data extent
+pad <- 0.2  # degrees padding — adjust for your region
+lon_range <- c(min(coords$lon) - pad, max(coords$lon) + pad)
+lat_range <- c(min(coords$lat) - pad, max(coords$lat) + pad)
+
+# 2D kernel density estimate — bandwidth controls smoothness
+# Increase n for finer resolution (slower); adjust bw for smoother/sharper surface
+kde <- kde2d(x = coords$lon, y = coords$lat, n = 300, lims = c(lon_range, lat_range),
+  h = c(bandwidth.nrd(coords$lon) * 1.5, bandwidth.nrd(coords$lat) * 1.5))
+
+# Convert KDE output to a data frame for ggplot
+kde_df <- expand.grid(lon = kde$x, lat = kde$y) %>% mutate(density = as.vector(kde$z)) %>%
+  filter(density > quantile(density, 0.60))  # only plot top 40% density cells
+
+## PLOT 
+# Color palette for heatmap — matches orange/red style in the EBV figure
+kde_palette <- c("#B8D4E8", "#B8E8D4", "#D4E8B8", "#E8E0B8", "#E8CCB8", "#E8B8C8", "#D4B8E8")
+
+
+diffusion_1990.4.a <- ggplot() +
+  geom_sf(data = states, fill = "#f0ede8", color = "#d0ccc8", linewidth = 0.3) +
+  # KDE heatmap surface (sits above basemap, below points)
+  geom_tile(data = kde_df, aes(x = lon, y = lat, fill = density, alpha = density)) +
+  scale_fill_scico(palette = "berlin", direction = 1, name = "Lineage\nDensity") +
+  scale_alpha_continuous(range = c(0.20, 0.80), guide = "none") +
+  # Branch lines (tree overlay)
+#  geom_segment(data = branch_lines, aes(x = parent_lon, y = parent_lat, xend = lon, yend = lat),
+#    color = "#4A1F8C", linewidth = 0.35, alpha = 0.55) +
+  # Tip/node points
+#  geom_point(data  = coords, aes(x = lon, y = lat),
+#    size  = 1.5, shape = 21, fill  = "#4A1F8C", color = "white", stroke = 0.4) +
+geom_sf(data = state_centers, color = "pink4", fill = "gold", size = 3, shape = 22) +
+  coord_sf(xlim   = c(-125, -66), ylim = c(24, 50), expand = FALSE) +
+#ggspatial::annotation_scale(location = "bl", width_hint = 0.25) +
+  theme_classic(base_size = 12) + theme(legend.position = "right",
+    legend.key.height = unit(1.2, "cm"),plot.title = element_text(face = "bold", size = 14),
+    axis.line = element_blank()) + labs(title = "Continuous relaxed-random-walk surface",
+    subtitle = "KDE of 1990.4.a locations from subclade MCC tree",
+    x = "Longitude",y = "Latitude")
+diffusion_1990.4.a
 
