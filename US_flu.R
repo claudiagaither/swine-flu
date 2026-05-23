@@ -1,7 +1,7 @@
 ## H3N2 influenza A transmission among domestic swine in the US
 ## phylogeography and ecological predictors of transmission!
 
-## part zero: packages and data pull ----
+## part zero: metadata ----
 
 source("C:/Users/cgait/OneDrive/Desktop/swine flu/US_flu_functions.R")
 library(ape)
@@ -32,6 +32,7 @@ library(tidyr)
 library(tidyverse)
 library(tigris)
 library(treeio)
+library(trend)
 library(viridis)
 library(writexl)
 library(xml2)
@@ -42,127 +43,6 @@ conflict_prefer("count",  "dplyr")
 conflict_prefer("summarise", "dplyr")
 conflicts_prefer(base::as.data.frame)
 
-## import/compile census of agriculture data
-#census_2022 <- fread("C:/Users/cgait/OneDrive/Desktop/swine flu/agriculture data/ag_census/qs.census2022.txt",
-#                     sep = "\t", header = TRUE, quote = "")
-#census_2017 <- fread("C:/Users/cgait/OneDrive/Desktop/swine flu/agriculture data/ag_census/qs.census2017.txt",
-#                     sep = "\t", header = TRUE, quote = "")
-#census_2012 <- fread("C:/Users/cgait/OneDrive/Desktop/swine flu/agriculture data/ag_census/qs.census2012.txt",
-#                     sep = "\t", header = TRUE, quote = "")
-#census_2007 <- fread("C:/Users/cgait/OneDrive/Desktop/swine flu/agriculture data/ag_census/qs.census2007.txt",
-#                     sep = "\t", header = TRUE, quote = "")
-#census_2002 <- fread("C:/Users/cgait/OneDrive/Desktop/swine flu/agriculture data/ag_census/qs.census2002.txt",
-#                     sep = "\t", header = TRUE, quote = "")
-
-#hogs_2022 <- census_2022 %>% filter(COMMODITY_DESC == "HOGS")
-#hogs_2017 <- census_2017 %>% filter(COMMODITY_DESC == "HOGS")
-#hogs_2012 <- census_2012 %>% filter(COMMODITY_DESC == "HOGS")
-#hogs_2007 <- census_2007 %>% filter(COMMODITY_DESC == "HOGS")
-#hogs_2002 <- census_2002 %>% filter(COMMODITY_DESC == "HOGS")
-#hog_census <- bind_rows(hogs_2022, hogs_2017, hogs_2012, hogs_2007, hogs_2002)
-#write.csv(hog_census, "C:/Users/cgait/OneDrive/Desktop/hog_census.csv")
-
-
-#vars   <- c("tmax", "tmin", "ppt", "vap", "ws")
-#chunks <- list(c("1990-01-01","1999-12-31"), c("2000-01-01","2009-12-31"),
-#               c("2010-01-01","2019-12-31"), c("2020-01-01","2024-12-31"))   # see note on end date below
-
-## helper: getTerraClim -> county means (exactextractr) -> tidy long
-#tidy_var <- function(aoi, v, start, end) {
-#  r     <- getTerraClim(AOI = aoi, varname = v, startDate = start, endDate = end)
-#  ras   <- r[[1]]
-#  dates <- as.Date(terra::time(ras))                 # one date per layer
-#  
-#  vals  <- exact_extract(ras, aoi, "mean", progress = FALSE)  # cols in layer order
-#  stopifnot(ncol(vals) == length(dates))             # guard against a column surprise
-#  
-#  cbind(GEOID = aoi$GEOID, vals) %>%
-#    setNames(c("GEOID", as.character(dates))) %>%
-#    pivot_longer(-GEOID, names_to = "date", values_to = "value") %>%
-#    mutate(date  = as.Date(date),
-#           year  = as.integer(format(date, "%Y")),
-#           month = as.integer(format(date, "%m")),
-#           variable = v)
-#}
-
-## runner: one state at a time, save as you go, auto-resume 
-#dir.create("climate_out", showWarnings = FALSE)
-#all_states <- list()
-
-#for (st in states20) {
-#  fpath <- file.path("climate_out", paste0(gsub(" ", "_", st), ".rds"))
-#  if (file.exists(fpath)) { all_states[[st]] <- readRDS(fpath); next }  # resume
-#  
-#  aoi_st <- cty %>%
-#    dplyr::filter(STATE_NAME == st) %>%
-#    dplyr::select(GEOID, NAME) %>%
-#    sf::st_transform(4326)
-#  
-#  pieces <- list()
-#  for (v in vars) for (ch in chunks) {
-#    pieces[[paste(v, ch[1])]] <- tryCatch(
-#      tidy_var(aoi_st, v, ch[1], ch[2]),
-#      error = function(e) { message("  skip ", st, " ", v, " ", ch[1],
-#                                    ": ", conditionMessage(e)); NULL })
-#    Sys.sleep(0.5)
-#  }
-#  out <- bind_rows(pieces) %>% mutate(STATE_NAME = st)
-#  saveRDS(out, fpath)
-#  all_states[[st]] <- out
-#  message("done: ", st, "  (", n_distinct(out$GEOID), " counties)")
-#}
-
-#climate_long <- bind_rows(all_states)
-#climate_long <- distinct(climate_long, GEOID, date, variable, .keep_all = TRUE)
-
-#climate_county <- climate_long %>% pivot_wider(names_from = variable, values_from = value) %>%
-#  mutate(tavg = (tmax + tmin) / 2, abs_humidity = 2167.4 * vap / (tavg + 273.15))
-#write.csv(climate_county, "C:/Users/cgait/OneDrive/Desktop/climate_county.csv")
-
-#climate_state <- climate_county %>% group_by(STATE_NAME, year, month) %>%
-#  summarise(across(c(tmax, tmin, tavg, ppt, vap, ws, abs_humidity), ~mean(.x, na.rm = TRUE)), .groups = "drop")
-#write.csv(climate_state, "C:/Users/cgait/OneDrive/Desktop/climate_state.csv")
-
-
-## per-county hog INVENTORY weights from the annual survey
-#survey_weights <- hog_survey %>% filter(Geo.Level  == "COUNTY",
-#                                        Commodity  == "HOGS",
-#                                        Data.Item == "HOGS - INVENTORY",   # inventory, not sales
-#                                        Domain == "TOTAL", Domain.Category == "NOT SPECIFIED",
-#                                        !is.na(State.ANSI), !is.na(County.ANSI)) %>%   # drops "OTHER COUNTIES"/district rows
-#  transmute(GEOID       = sprintf("%02d%03d", as.integer(State.ANSI), as.integer(County.ANSI)),
-#    survey_year = as.integer(Year),
-#    head        = as.numeric(gsub(",", "", Value))      # "(D)"/"(Z)" -> NA on coercion
-#  ) %>% filter(!is.na(head)) %>% group_by(GEOID, survey_year) %>%     # collapse any duplicate Periods in a year
-#  summarise(head = mean(head, na.rm = TRUE), .groups = "drop")
-
-## suppression check: usable counties per year
-#survey_weights %>% dplyr::count(survey_year) %>% arrange(survey_year)
-
-## normalize FIPS first — read.csv likely stripped leading zeros from GEOID
-#climate_county <- climate_county %>% mutate(GEOID = sprintf("%05d", as.integer(GEOID)))
-#sw <- as.data.table(survey_weights)[, .(GEOID, year = survey_year, head)]
-#setkey(sw, GEOID, year)
-#cc_keys <- as.data.table(distinct(climate_county, GEOID, year))
-#setkey(cc_keys, GEOID, year)
-
-## within each GEOID, pull head from the closest available survey year
-#county_year_wt <- as.data.frame(sw[cc_keys, roll = "nearest"])   # -> GEOID, year, head
-
-#wmean <- function(x, w) {
-#  ok <- is.finite(x) & is.finite(w) & w > 0
-#  if (!any(ok)) NA_real_ else sum(x[ok] * w[ok]) / sum(w[ok])
-#}
-
-#climate_state_wt <- climate_county %>% left_join(county_year_wt, by = c("GEOID", "year")) %>%
-#  group_by(STATE_NAME, year, month) %>% summarise(across(c(tmax, tmin, tavg, ppt, vap, ws, abs_humidity),
-#                   ~ wmean(.x, head)), .groups = "drop")
-
-#write.csv(climate_state_wt, "C:/Users/cgait/OneDrive/Desktop/climate_state_wt.csv", row.names = FALSE)
-
-
-
-## part one: metadata ----
 
 ## import & clean metadata
 states <- read_sf("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/US_State_Boundaries/US_State_Boundaries.shp")
@@ -170,9 +50,7 @@ hog_census <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/agriculture da
 hog_survey_01 <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/agriculture data/ag_survey_alabama_mississippi.csv")
 hog_survey_02 <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/agriculture data/ag_survey_missouri_tennessee.csv")
 hog_survey_03 <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/agriculture data/ag_survey_texas_wisconsin.csv")
-climate_county <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/climate_county.csv")
-climate_state <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/climate_state.csv")
-#climate_state_wt <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/climate_state_wt.csv")
+climate_state_wt <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/climate_state_wt.csv")
 
 ## remove non continental US states
 states <- states %>% filter(NAME!="District of Columbia")
@@ -219,7 +97,7 @@ survey_weights %>% dplyr::count(survey_year) %>% arrange(survey_year)
 #loc_lon <- setNames(locations$lon, locations$state)
 
 
-## MCC tree and tips metadata ----
+## part one: MCC tree and tips ----
 
 ## clade assignments made separately using BV-BRC
 tip_clades <- read.csv("C:/Users/cgait/OneDrive/Desktop/BEAST runs/1990 US flu/1990_v1/clade_assignment_updated.csv")
@@ -332,13 +210,13 @@ clade_names <- tip_clades$sequence_name
 #length(intersect(tree_tips, clade_names))
 
 # See which clade assignments are missing (not matching tree tips)
-missing_in_tree <- setdiff(clade_names, tree_tips)
+missing_in_tree <- base::setdiff(clade_names, tree_tips)
 
 # See which tree tips don't have clade assignments
-missing_clades <- setdiff(tree_tips, clade_names)
+missing_clades <- base::setdiff(tree_tips, clade_names)
 
 ## prune missing_clades tips from tree and re-plot?
-pruned_tree <- drop.tip(mcc_tree@phylo, missing_clades)
+pruned_tree <- treeio::drop.tip(mcc_tree@phylo, missing_clades)
 
 # If mcc_tree is a treedata object, update it
 mcc_tree_pruned <- mcc_tree
@@ -446,7 +324,8 @@ tip_meta_assigned <- tip_meta %>% filter(!clade %in% c("Missing", NA_character_)
 #write.csv(clade_summary, file.path(out_dir, "clade_xml_summary.csv"), row.names = FALSE)
 
 remove(doc, taxa_nodes, tree_clade, chain_length, log_every, out_dir, save_every, xml_path, tree_clade_pruned, 
-       missing_clades, missing_in_tree, extra_states, cl, result, rain, avg_temp)
+       missing_clades, missing_in_tree, extra_states, cl, result, rain, avg_temp, hog_survey_01, hog_survey_02,
+       hog_survey_03, mcc_tree, tip_dates, tree_phylo)
 
 
 ## part three: time-series models ----
@@ -469,13 +348,13 @@ state_prev <- tip_meta_assigned %>% group_by(year_month, state, clade) %>%
 clades_of_interest <- c("2010.1like", "1990.4.a","1990.1")
 states_of_interest <- c("Iowa","Nebraska","Missouri","North Carolina")
 date_start <- as.Date("1990-01-01")
-date_end   <- as.Date("2026-4-01")
+date_end   <- as.Date("2024-12-31")
 state_prev_filtered <- state_prev %>% filter(state %in% states_of_interest)
 
 ## outcome of a new dominant clade over time for each state
 dominant <- state_prev_filtered %>% group_by(state, year_month) %>%
   slice_max(prevalence, n = 1, with_ties = FALSE) %>% ungroup() %>% arrange(state, year_month) %>% group_by(state) %>%
-  mutate(prev_dominant = lag(clade),new_dominant = ifelse(clade != prev_dominant & !is.na(prev_dominant), 1, 0)) %>% ungroup()
+  mutate(prev_dominant = dplyr::lag(clade),new_dominant = ifelse(clade != prev_dominant & !is.na(prev_dominant), 1, 0)) %>% ungroup()
 
 ## code indicator for major clades
 dominant <- dominant %>% mutate(major_clade = case_when(
@@ -486,9 +365,119 @@ dominant <- dominant %>% mutate(major_clade = case_when(
             clade == "2010.1like" ~ "2010", clade == "Other human" ~ "Human", TRUE ~ NA))
 
 ## indicator outcome of shift between the 2 major clades 
-dominant <- dominant %>% arrange(state, year_month) %>% group_by(state) %>% mutate(prev_major = lag(major_clade),
+dominant <- dominant %>% arrange(state, year_month) %>% group_by(state) %>% mutate(prev_major = dplyr::lag(major_clade),
     major_dominant = ifelse(major_clade != prev_major & !is.na(prev_major) & major_clade %in% c("1990", "2010") &
     prev_major %in% c("1990", "2010"), 1, 0)) %>% ungroup()
+
+
+## time series models for outcome of shifting major clade, or individual clade prevalences?
+
+# Climate trend diagnostics for time-series pre-processing
+# Goal: decide whether each weighted climate variable carries a long-term
+#       trend that should be removed before time-series modeling, and see
+#       how those trends relate to major_dominant clade shifts.
+
+clim_vars <- c("tmax", "tmin", "tavg", "ppt", "vap", "ws", "abs_humidity")
+is_major_shift <- function(df) df$major_dominant == 1
+
+# 1. Build a proper date + long format 
+clim <- climate_state_wt %>% mutate(date = as.Date(sprintf("%d-%02d-01", year, month)))
+clim_long <- clim %>% pivot_longer(all_of(clim_vars), names_to = "variable", values_to = "value") %>%
+  mutate(variable = factor(variable, levels = clim_vars))  # keeps facet order
+clim_long <- clim_long %>% filter(date < "2024-12-31")
+clim_long <- clim_long %>% filter(date > "2014-01-01")
+
+# 2. Major-dominant shift events 
+# Per-state shift dates (for single-state overlays)...
+major_shifts <- dominant %>% filter(is_major_shift(.)) %>% transmute(state, date = as.Date(year_month)) %>% distinct()
+
+# ...and shifts-per-year aggregated across all states (for the all-state plot)
+shifts_per_year <- major_shifts %>% mutate(year = as.integer(format(date, "%Y"))) %>%
+  count(year, name = "n_shifts")
+
+# PLOT 1 — Annual means: the clearest view for spotting a removable trend
+#   - one faint line per state
+#   - one pooled linear trend (red) per variable: slope/sign = the trend
+#   - grey vertical bars mark years with many major shifts
+clim_annual <- clim_long %>% group_by(STATE_NAME, variable, year) %>%
+  summarise(value = mean(value, na.rm = TRUE), .groups = "drop")
+
+# scale shift counts to sit in the background of each free-y facet
+p1 <- ggplot(clim_annual, aes(year, value)) +
+  # shift-frequency backdrop (rescaled per facet via geom_rug-style ticks)
+  geom_vline(data = shifts_per_year %>% filter(n_shifts >= quantile(n_shifts, .75)),
+             aes(xintercept = year), color = "pink3", linewidth = 0.4) +
+  geom_line(aes(group = STATE_NAME), alpha = 0.70, color = "skyblue3") +
+  geom_smooth(aes(group = 1), method = "lm", formula = y ~ x,
+              se = TRUE, color = "tomato", linewidth = 0.9) +
+  facet_wrap(~ variable, scales = "free_y", ncol = 2) +
+  labs(title = "Annual-mean climate by state, 2014–2024",
+       subtitle = "Red = pooled linear trend; pink lines = high-shift years",
+       x = NULL, y = NULL) +
+  theme_minimal(base_size = 11)
+#print(p1)
+
+# PLOT 2 — Deseasonalized monthly anomalies: confirms trend after removing
+#          the annual cycle (anomaly = value − state-specific monthly mean)
+clim_anom <- clim_long %>% group_by(STATE_NAME, variable, month) %>%
+  mutate(anomaly = value - mean(value, na.rm = TRUE)) %>% ungroup()
+
+p2 <- ggplot(clim_anom, aes(date, anomaly)) +
+  geom_hline(yintercept = 0, color = "pink4", linewidth = 0.3) +
+  geom_line(aes(group = STATE_NAME), alpha = 0.10, color = "skyblue3") +
+  geom_smooth(aes(group = 1), method = "loess", span = 0.3,
+              se = FALSE, color = "tomato", linewidth = 0.9) +
+  facet_wrap(~ variable, scales = "free_y", ncol = 2) +
+  labs(title = "Deseasonalized monthly anomalies, 2014–2024",
+       subtitle = "Red loess on anomalies: a sloping line = residual trend to remove",
+       x = NULL, y = "Anomaly (value − monthly climatology)") +
+  theme_minimal(base_size = 11)
+
+# PLOT 3 — Single-state detail with that state's major shifts as vlines.
+#          Overlaying per-state events only makes sense within one state.
+plot_one_state <- function(state_name) {
+  d  <- filter(clim_long, STATE_NAME == state_name)
+  sh <- filter(major_shifts, state == state_name)
+  ggplot(d, aes(date, value)) +
+    geom_vline(data = sh, aes(xintercept = date),
+               color = "magenta", alpha = 0.5, linewidth = 0.4) +
+    geom_line(color = "skyblue3", linewidth = 0.3) +
+    geom_smooth(method = "lm", formula = y ~ x, se = FALSE,
+                color = "tomato", linewidth = 0.7) +
+    facet_wrap(~ variable, scales = "free_y", ncol = 2) +
+    labs(title = paste0(state_name, ": monthly climate vs. major clade shifts"),
+         subtitle = "Pink lines = major_dominant shifts; red = linear trend",
+         x = NULL, y = NULL) +
+    theme_minimal(base_size = 11)
+}
+
+# QUANTITATIVE BACKUP — slope, significance, and (optional) Mann-Kendall
+#   per variable on the pooled annual means. Use this to decide objectively
+#   which variables actually need detrending vs. which are flat.
+
+trend_summary <- clim_annual %>% group_by(variable) %>%
+  group_modify(~{
+    fit <- lm(value ~ year, data = .x)
+    tibble(slope_per_year = coef(fit)[["year"]],
+           p_value        = summary(fit)$coefficients["year", "Pr(>|t|)"],
+           total_change   = coef(fit)[["year"]] * (max(.x$year) - min(.x$year))
+      # , mk_p = trend::mk.test(
+      #     .x %>% group_by(year) %>% summarise(v = mean(value)) %>% pull(v))$p.value
+    )}) %>% ungroup() %>% arrange(p_value)
+
+#print(p1)
+#print(p2)
+#print(plot_one_state("North Carolina"))
+#print(plot_one_state("Iowa"))
+
+#print(trend_summary)
+## based on the trend summary, the slope for max temp and avg temp have p values under 0.05
+## min temp has a p-value of 0.0544, but others are all over 0.10
+
+
+
+## fit models for the outcome of major dominant, within 2014-2024?
+
 
 
 
