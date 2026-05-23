@@ -1,14 +1,16 @@
 ## H3N2 influenza A transmission among domestic swine in the US
 ## phylogeography and ecological predictors of transmission!
 
-## part one: data & baseline MCC tree ----
+## part zero: packages and data pull ----
 
 source("C:/Users/cgait/OneDrive/Desktop/swine flu/US_flu_functions.R")
-
-## part one A: BEAST input
 library(ape)
 library(Biostrings)
+library(climateR)
+library(conflicted)
+library(data.table)
 library(dplyr)
+library(exactextractr)
 library(ggplot2)
 library(ggtree)
 library(lubridate)
@@ -22,76 +24,208 @@ library(rnaturalearth)
 library(rnaturalearthdata)
 library(scales)
 library(scico)
-#library(seraphim)
 library(sf)
 library(ShortRead)
 library(stringr)
 library(terra)
+library(tidyr)
 library(tidyverse)
+library(tigris)
 library(treeio)
 library(viridis)
 library(writexl)
 library(xml2)
 
+conflict_prefer("select", "dplyr")
+conflict_prefer("filter", "dplyr")
+conflict_prefer("count",  "dplyr")
+conflict_prefer("summarise", "dplyr")
+conflicts_prefer(base::as.data.frame)
 
-## state-level metadata
+## import/compile census of agriculture data
+#census_2022 <- fread("C:/Users/cgait/OneDrive/Desktop/swine flu/agriculture data/ag_census/qs.census2022.txt",
+#                     sep = "\t", header = TRUE, quote = "")
+#census_2017 <- fread("C:/Users/cgait/OneDrive/Desktop/swine flu/agriculture data/ag_census/qs.census2017.txt",
+#                     sep = "\t", header = TRUE, quote = "")
+#census_2012 <- fread("C:/Users/cgait/OneDrive/Desktop/swine flu/agriculture data/ag_census/qs.census2012.txt",
+#                     sep = "\t", header = TRUE, quote = "")
+#census_2007 <- fread("C:/Users/cgait/OneDrive/Desktop/swine flu/agriculture data/ag_census/qs.census2007.txt",
+#                     sep = "\t", header = TRUE, quote = "")
+#census_2002 <- fread("C:/Users/cgait/OneDrive/Desktop/swine flu/agriculture data/ag_census/qs.census2002.txt",
+#                     sep = "\t", header = TRUE, quote = "")
+
+#hogs_2022 <- census_2022 %>% filter(COMMODITY_DESC == "HOGS")
+#hogs_2017 <- census_2017 %>% filter(COMMODITY_DESC == "HOGS")
+#hogs_2012 <- census_2012 %>% filter(COMMODITY_DESC == "HOGS")
+#hogs_2007 <- census_2007 %>% filter(COMMODITY_DESC == "HOGS")
+#hogs_2002 <- census_2002 %>% filter(COMMODITY_DESC == "HOGS")
+#hog_census <- bind_rows(hogs_2022, hogs_2017, hogs_2012, hogs_2007, hogs_2002)
+#write.csv(hog_census, "C:/Users/cgait/OneDrive/Desktop/hog_census.csv")
+
+
+#vars   <- c("tmax", "tmin", "ppt", "vap", "ws")
+#chunks <- list(c("1990-01-01","1999-12-31"), c("2000-01-01","2009-12-31"),
+#               c("2010-01-01","2019-12-31"), c("2020-01-01","2024-12-31"))   # see note on end date below
+
+## helper: getTerraClim -> county means (exactextractr) -> tidy long
+#tidy_var <- function(aoi, v, start, end) {
+#  r     <- getTerraClim(AOI = aoi, varname = v, startDate = start, endDate = end)
+#  ras   <- r[[1]]
+#  dates <- as.Date(terra::time(ras))                 # one date per layer
+#  
+#  vals  <- exact_extract(ras, aoi, "mean", progress = FALSE)  # cols in layer order
+#  stopifnot(ncol(vals) == length(dates))             # guard against a column surprise
+#  
+#  cbind(GEOID = aoi$GEOID, vals) %>%
+#    setNames(c("GEOID", as.character(dates))) %>%
+#    pivot_longer(-GEOID, names_to = "date", values_to = "value") %>%
+#    mutate(date  = as.Date(date),
+#           year  = as.integer(format(date, "%Y")),
+#           month = as.integer(format(date, "%m")),
+#           variable = v)
+#}
+
+## runner: one state at a time, save as you go, auto-resume 
+#dir.create("climate_out", showWarnings = FALSE)
+#all_states <- list()
+
+#for (st in states20) {
+#  fpath <- file.path("climate_out", paste0(gsub(" ", "_", st), ".rds"))
+#  if (file.exists(fpath)) { all_states[[st]] <- readRDS(fpath); next }  # resume
+#  
+#  aoi_st <- cty %>%
+#    dplyr::filter(STATE_NAME == st) %>%
+#    dplyr::select(GEOID, NAME) %>%
+#    sf::st_transform(4326)
+#  
+#  pieces <- list()
+#  for (v in vars) for (ch in chunks) {
+#    pieces[[paste(v, ch[1])]] <- tryCatch(
+#      tidy_var(aoi_st, v, ch[1], ch[2]),
+#      error = function(e) { message("  skip ", st, " ", v, " ", ch[1],
+#                                    ": ", conditionMessage(e)); NULL })
+#    Sys.sleep(0.5)
+#  }
+#  out <- bind_rows(pieces) %>% mutate(STATE_NAME = st)
+#  saveRDS(out, fpath)
+#  all_states[[st]] <- out
+#  message("done: ", st, "  (", n_distinct(out$GEOID), " counties)")
+#}
+
+#climate_long <- bind_rows(all_states)
+#climate_long <- distinct(climate_long, GEOID, date, variable, .keep_all = TRUE)
+
+#climate_county <- climate_long %>% pivot_wider(names_from = variable, values_from = value) %>%
+#  mutate(tavg = (tmax + tmin) / 2, abs_humidity = 2167.4 * vap / (tavg + 273.15))
+#write.csv(climate_county, "C:/Users/cgait/OneDrive/Desktop/climate_county.csv")
+
+#climate_state <- climate_county %>% group_by(STATE_NAME, year, month) %>%
+#  summarise(across(c(tmax, tmin, tavg, ppt, vap, ws, abs_humidity), ~mean(.x, na.rm = TRUE)), .groups = "drop")
+#write.csv(climate_state, "C:/Users/cgait/OneDrive/Desktop/climate_state.csv")
+
+
+## per-county hog INVENTORY weights from the annual survey
+#survey_weights <- hog_survey %>% filter(Geo.Level  == "COUNTY",
+#                                        Commodity  == "HOGS",
+#                                        Data.Item == "HOGS - INVENTORY",   # inventory, not sales
+#                                        Domain == "TOTAL", Domain.Category == "NOT SPECIFIED",
+#                                        !is.na(State.ANSI), !is.na(County.ANSI)) %>%   # drops "OTHER COUNTIES"/district rows
+#  transmute(GEOID       = sprintf("%02d%03d", as.integer(State.ANSI), as.integer(County.ANSI)),
+#    survey_year = as.integer(Year),
+#    head        = as.numeric(gsub(",", "", Value))      # "(D)"/"(Z)" -> NA on coercion
+#  ) %>% filter(!is.na(head)) %>% group_by(GEOID, survey_year) %>%     # collapse any duplicate Periods in a year
+#  summarise(head = mean(head, na.rm = TRUE), .groups = "drop")
+
+## suppression check: usable counties per year
+#survey_weights %>% dplyr::count(survey_year) %>% arrange(survey_year)
+
+## normalize FIPS first — read.csv likely stripped leading zeros from GEOID
+#climate_county <- climate_county %>% mutate(GEOID = sprintf("%05d", as.integer(GEOID)))
+#sw <- as.data.table(survey_weights)[, .(GEOID, year = survey_year, head)]
+#setkey(sw, GEOID, year)
+#cc_keys <- as.data.table(distinct(climate_county, GEOID, year))
+#setkey(cc_keys, GEOID, year)
+
+## within each GEOID, pull head from the closest available survey year
+#county_year_wt <- as.data.frame(sw[cc_keys, roll = "nearest"])   # -> GEOID, year, head
+
+#wmean <- function(x, w) {
+#  ok <- is.finite(x) & is.finite(w) & w > 0
+#  if (!any(ok)) NA_real_ else sum(x[ok] * w[ok]) / sum(w[ok])
+#}
+
+#climate_state_wt <- climate_county %>% left_join(county_year_wt, by = c("GEOID", "year")) %>%
+#  group_by(STATE_NAME, year, month) %>% summarise(across(c(tmax, tmin, tavg, ppt, vap, ws, abs_humidity),
+#                   ~ wmean(.x, head)), .groups = "drop")
+
+#write.csv(climate_state_wt, "C:/Users/cgait/OneDrive/Desktop/climate_state_wt.csv", row.names = FALSE)
+
+
+
+## part one: metadata ----
+
+## import & clean metadata
 states <- read_sf("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/US_State_Boundaries/US_State_Boundaries.shp")
+hog_census <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/agriculture data/hog_census.csv")
+hog_survey_01 <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/agriculture data/ag_survey_alabama_mississippi.csv")
+hog_survey_02 <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/agriculture data/ag_survey_missouri_tennessee.csv")
+hog_survey_03 <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/agriculture data/ag_survey_texas_wisconsin.csv")
+climate_county <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/climate_county.csv")
+climate_state <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/climate_state.csv")
+#climate_state_wt <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/climate_state_wt.csv")
+
 ## remove non continental US states
 states <- states %>% filter(NAME!="District of Columbia")
 states <- states %>% filter(NAME!="U.S. Virgin Islands")
 states <- states %>% filter(NAME!="Puerto Rico")
 
-## census of agriculture data
-ag_census01 <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/agriculture data/ag_census/agcensus_alabama_hawaii.csv")
+## filter for counties represented by hog census?
+hog_survey <- bind_rows(hog_survey_01, hog_survey_02, hog_survey_03)
+county_names <-hog_survey[,c("State","County","Value")]
+hogs_county <- hog_census[,c("STATE_ANSI","COUNTY_ANSI","STATE_NAME")]
+
+## per-county hog INVENTORY weights from the annual survey
+survey_weights <- hog_survey %>% filter(Geo.Level  == "COUNTY",
+                                        Commodity  == "HOGS",
+         Data.Item == "HOGS - INVENTORY",   # inventory, not sales
+         Domain == "TOTAL", Domain.Category == "NOT SPECIFIED",
+         !is.na(State.ANSI), !is.na(County.ANSI)) %>%   # drops "OTHER COUNTIES"/district rows
+  transmute(
+    GEOID       = sprintf("%02d%03d", as.integer(State.ANSI), as.integer(County.ANSI)),
+    survey_year = as.integer(Year),
+    head        = as.numeric(gsub(",", "", Value))      # "(D)"/"(Z)" -> NA on coercion
+  ) %>% filter(!is.na(head)) %>% group_by(GEOID, survey_year) %>%     # collapse any duplicate Periods in a year
+  summarise(head = mean(head, na.rm = TRUE), .groups = "drop")
+
+## suppression check: usable counties per year
+survey_weights %>% dplyr::count(survey_year) %>% arrange(survey_year)
 
 
-## climate data by state
-base_path <- "C:/Users/cgait/OneDrive/Desktop/swine flu/climate data/NOAA temp & rain/"
-state_ids <- c(
-  IL = "illinois",    IN = "indiana",       IA = "iowa",
-  MI = "michigan",    MN = "minnesota",     NE = "nebraska",
-  NC = "northcarolina", OH = "ohio",        PA = "pennsylvania",
-  KS = "kansas",      AZ = "arizona",       AK = "arkansas",
-  CO = "colorado",    KY = "kentucky",      MO = "missouri",
-  MT = "montana",     NM = "newmexico",     OK = "oklahoma",
-  SD = "southdakota", TX = "texas",         UT = "utah",
-  WY = "wyoming")
+## swine center selection algorithm based on Census of Agriculture data
+## need lat and lon columns
+#locations <- data.frame(
+#  state = c("Iowa","Minnesota","Illinois","Indiana","Ohio","North Carolina",
+#            "Pennsylvania","Michigan","Wisconsin","Kentucky","Arkansas",
+#            "Oklahoma","Texas","Missouri","Kansas","Colorado","Wyoming",
+#            "Utah","Nebraska","South Dakota",
+## fewer than 10 sequences per state
+#            "Alabama","Arizona","California","Florida","Georgia",
+#            "Louisiana","Maryland","Montana","New Mexico","New York",
+#            "North Dakota","Oregon","South Carolina","Tennessee",
+#            "Virginia","West Virginia"))
 
-## Import monthly average temperature across states
-avg_temp <- lapply(state_ids, function(s) {
-  read.csv(file.path(base_path, "average temp", paste0(s, "_avgtemp.csv")),
-           skip = 2, header = TRUE)
-})
-names(avg_temp) <- names(state_ids)
+## Build a named-vector lookup  state → c(lat, lon)
+#loc_lat <- setNames(locations$lat, locations$state)
+#loc_lon <- setNames(locations$lon, locations$state)
 
-## Import monthly total rainfall at state level ---
-rain <- lapply(state_ids, function(s) {
-  read.csv(file.path(base_path, "total precipitation", paste0(s, "_rain.csv")),
-           skip = 2, header = TRUE)
-})
-names(rain) <- names(state_ids)
 
-temp_df <- imap_dfr(avg_temp, function(df, abbr) {
-  df$state <- abbr
-  df$year_month <- as.Date(paste0(df$Date, "01"), format = "%Y%m%d")
-  df})
-
-rain_df <- imap_dfr(rain, function(df, abbr) {
-  df$state <- abbr
-  df$year_month <- as.Date(paste0(df$Date, "01"), format = "%Y%m%d")
-  df})
-
-## Filter to match the clade plot time range 
-temp_df <- temp_df %>% filter(year_month >= as.Date("1997-01-01"))
-rain_df <- rain_df %>% filter(year_month >= as.Date("1997-01-01"))
-
+## MCC tree and tips metadata ----
 
 ## clade assignments made separately using BV-BRC
 tip_clades <- read.csv("C:/Users/cgait/OneDrive/Desktop/BEAST runs/1990 US flu/1990_v1/clade_assignment_updated.csv")
 ## combined maximum clade credibility (MCC) tree from TreeAnnotator
 mcc_tree <- read.beast("C:/Users/cgait/OneDrive/Desktop/BEAST runs/1990 US flu/1990_v1/mcc_1990_v1_150k.trees")
 options(ignore.negative.edge = TRUE)
-
 
 ## tip/taxa metadata
 tip_dates <- read.table("C:/Users/cgait/OneDrive/Desktop/BEAST runs/1990 US flu/1990_v1/aligned_HA_1990_dates.txt",
@@ -139,19 +273,14 @@ tip_meta <- tip_meta %>% mutate(state = case_when(
 tip_meta <- tip_meta %>% mutate(region = case_when(
     state %in% c("Alabama","Florida","Georgia","North Carolina","West Virginia",
                  "South Carolina", "Tennessee", "Virginia","Louisiana") ~ "Southeast",
-    
     state %in% c("Arizona","California","New Mexico","Oregon",
                  "Colorado","Oklahoma", "Texas","Utah") ~ "Southwest/West",
-    
     state %in% c("Arkansas","Illinois","Indiana","Iowa","Kansas","Kentucky", 
                  "Missouri","Ohio","Nebraska") ~ "Midwest",
-    
     state %in% c("Minnesota","Montana","North Dakota","South Dakota","Wisconsin",
                  "Wyoming","Michigan") ~ "Central North",
-    
     state %in% c("Maryland", "New York", "Pennsylvania") ~ "Northeast",
     is.na(state) ~ NA_character_))
-
 
 # Create complete metadata for all tree tips
 all_tree_tips <- data.frame(sequence_name = mcc_tree@phylo$tip.label)
@@ -185,27 +314,8 @@ tip_meta <- tip_meta %>% mutate(clade = case_when(
 ## once ESS values (excluding coalescent, join & prior if necessary, but ideally all values) are above 200, 
 ## export and combine .trees files using LogCombiner, then put combined tree into TreeAnnotator for the MCC tree
 
-## part one B: MCC tree 
-
-## prune sequences from 1970s? or just crop tree ??
-#remove_tips <- c("A/swine/Illinois/A00857131/2011|EPI_ISL_121898|A_/_H3N2||||2011-09-24|HA|4")
-# verify both tips actually exist in the tree before pruning
-#missing <- setdiff(remove_tips, mcc_tree@phylo$tip.label)
-#if (length(missing)) stop(paste("These tips are not in the tree:", paste(missing, collapse = ", ")))
-
-## prune tree — drop.tip removes the named tips directly
-#mcc_tree <- treeio::drop.tip(mcc_tree, remove_tips)
-# remove dates that are not in the tree
-#tip_meta <- tip_meta[tip_meta$sequence_name %in% mcc_tree@phylo$tip.label, , drop = FALSE]
-# verify
-#stopifnot(length(mcc_tree@phylo$tip.label) == nrow(tip_meta))
-# prune metadata to match
-#tip_meta <- tip_meta[!tip_meta$sequence_name %in% remove_tips, , drop = FALSE]
-
 # extract and view data
 tree_phylo <- mcc_tree@phylo
-
-#table(tip_meta_clades$clade, useNA="always")
 
 #color tips by clade assignments made using BV-BRC
 tree_clade <- ggtree(mcc_tree) %<+% tip_meta +
@@ -280,39 +390,6 @@ mcc_tree_pruned@phylo <- pruned_tree
 #names(seq_seqs) <- seq_ids
 #cat("Parsed", length(taxon_ids), "taxa and", length(seq_ids), "sequences from template.\n")
 
-
-## Lat/lon lookup from state swine centers
- locations <- data.frame(
-   state = c("Iowa","Minnesota","Illinois","Indiana","Ohio","North Carolina",
-             "Pennsylvania","Michigan","Wisconsin","Kentucky","Arkansas",
-             "Oklahoma","Texas","Missouri","Kansas","Colorado","Wyoming",
-             "Utah","Nebraska","South Dakota",
-             ## fewer than 10 sequences per state
-             "Alabama","Arizona","California","Florida","Georgia",
-             "Louisiana","Maryland","Montana","New Mexico","New York",
-             "North Dakota","Oregon","South Carolina","Tennessee",
-             "Virginia","West Virginia"),
-   lat = c(42.783, 44.105, 40.383, 40.843, 40.613, 35.236,
-           40.475, 42.952, 43.631, 37.232, 34.300, 36.666,
-           31.542, 40.074, 39.636, 39.021, 41.509, 38.172,
-           41.452, 43.374,
-           32.806,  34.048,  36.778,  27.995,  33.040,
-           31.169,  39.046,  46.813,  34.840,  42.165,
-           47.528,  44.572,  33.836,  35.518,
-           37.769,  38.468),
-   lon = c(-94.428, -95.262, -89.271, -86.314, -83.635, -78.193,
-           -76.939, -85.810, -90.184, -87.148, -93.872, -99.812,
-           -96.576, -92.102, -96.882, -102.390, -104.463, -113.663,
-           -97.284, -97.486,
-           -86.791, -111.094, -119.418, -81.760, -83.644,
-           -91.867,  -76.641, -110.362, -106.249, -74.949,
-           -99.784, -122.071,  -81.164, -86.580,
-           -78.170,  -80.955))
-#write_xlsx(locations, "C:/Users/cgait/OneDrive/Desktop/locations.xlsx")
-
-## Build a named-vector lookup  state → c(lat, lon)
-loc_lat <- setNames(locations$lat, locations$state)
-loc_lon <- setNames(locations$lon, locations$state)
  
  ## Check which states in tip_meta are still un-geocoded 
  #all_states_in_data <- unique(na.omit(tip_meta$state))
@@ -372,16 +449,7 @@ remove(doc, taxa_nodes, tree_clade, chain_length, log_every, out_dir, save_every
        missing_clades, missing_in_tree, extra_states, cl, result, rain, avg_temp)
 
 
-## part two B: continuous-relaxed-random-walk surface
-
-
-
-## part two C: branch-vector plot?
-## cumulative Euclidean displacement vs phylogenetic distance from root/node age proxy
-
-
-
-## part three: time-series data ----
+## part three: time-series models ----
 
 ## create time-series prevalence data for each clade within each state
 ## add a year-month column for grouping
@@ -403,43 +471,11 @@ states_of_interest <- c("Iowa","Nebraska","Missouri","North Carolina")
 date_start <- as.Date("1990-01-01")
 date_end   <- as.Date("2026-4-01")
 state_prev_filtered <- state_prev %>% filter(state %in% states_of_interest)
-#state_prev_filtered <- state_prev_filtered %>% filter(clade %in% clades_of_interest)
-
-state_lookup <- c(IA = "Iowa", NE = "Nebraska", MO = "Missouri", NC = "North Carolina")
-temp_df$state <- state_lookup[temp_df$state]
-rain_df$state <- state_lookup[rain_df$state]
-temp_df <- temp_df %>% filter(!is.na(state))
-rain_df <- rain_df %>% filter(!is.na(state))
-
-## plot clade prevalence over time in select states
-## overlay monthly rainfall for these states over the same time?? as a line
-# Choose a scaling factor to map temperature onto the prevalence axis
-
-rain_scale <- max(state_prev_filtered$prevalence, na.rm = TRUE) / 
-  max(rain_df$Value, na.rm = TRUE)
-state_clades_rain <- ggplot(state_prev_filtered,
-  aes(x = year_month, y = prevalence, color = clade)) +
-  geom_point(size = 3.5, alpha = 0.6) +
-  geom_line(data = rain_df, aes(x = year_month, y = Value * rain_scale, color = NULL),
-            color = "steelblue", linewidth = 0.5, alpha = 0.5) +
-#  scale_color_manual(values = c("skyblue", "orange2", "pink")) +
-  facet_wrap(~ state, scales = "free_y") +
-  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
-  scale_y_continuous(labels = scales::percent_format(),
-    sec.axis = sec_axis(~ . / rain_scale, name = "Total Rainfall (in)")) +
-  labs(title = "Monthly Clade Prevalence & Rainfall by State (1997–2026)",
-       x = "Month", y = "Prevalence", color = "Clade") +
-  theme_classic() + theme(axis.text.x = element_text(angle = 45, hjust = 1),
-        strip.text = element_text(face = "bold"))
-#state_clades_rain
 
 ## outcome of a new dominant clade over time for each state
 dominant <- state_prev_filtered %>% group_by(state, year_month) %>%
-  slice_max(prevalence, n = 1, with_ties = FALSE) %>%
-  ungroup() %>% arrange(state, year_month) %>% group_by(state) %>%
-  mutate(prev_dominant = lag(clade),new_dominant = ifelse(
-    clade != prev_dominant & !is.na(prev_dominant), 1, 0)) %>% ungroup()
-
+  slice_max(prevalence, n = 1, with_ties = FALSE) %>% ungroup() %>% arrange(state, year_month) %>% group_by(state) %>%
+  mutate(prev_dominant = lag(clade),new_dominant = ifelse(clade != prev_dominant & !is.na(prev_dominant), 1, 0)) %>% ungroup()
 
 ## code indicator for major clades
 dominant <- dominant %>% mutate(major_clade = case_when(
@@ -447,30 +483,12 @@ dominant <- dominant %>% mutate(major_clade = case_when(
             clade == "1990.4.b1b2" ~ "1990", clade == "1990.4.d" ~ "1990",
             clade == "1990.4.f" ~ "1990", clade == "1990.4.i" ~ "1990",
             clade == "1990.4.k" ~ "1990", clade == "1990.4like" ~ "1990",
-            clade == "2010.1like" ~ "2010", clade == "Other human" ~ "Human",
-            TRUE ~ NA))
+            clade == "2010.1like" ~ "2010", clade == "Other human" ~ "Human", TRUE ~ NA))
 
 ## indicator outcome of shift between the 2 major clades 
-dominant <- dominant %>% arrange(state, year_month) %>%
-  group_by(state) %>% mutate(prev_major = lag(major_clade),
-    major_dominant = ifelse(major_clade != prev_major &
-        !is.na(prev_major) & major_clade %in% c("1990", "2010") &
+dominant <- dominant %>% arrange(state, year_month) %>% group_by(state) %>% mutate(prev_major = lag(major_clade),
+    major_dominant = ifelse(major_clade != prev_major & !is.na(prev_major) & major_clade %in% c("1990", "2010") &
     prev_major %in% c("1990", "2010"), 1, 0)) %>% ungroup()
-
-shift_events <- dominant %>% filter(major_dominant == 1)
-#shift_events <- dominant %>% filter(new_dominant == 1)
-
-state_shifts_rain <- ggplot(state_prev_filtered, aes(x = year_month, y = prevalence, color = clade)) +
-  geom_line(data = rain_df, aes(x = year_month, y = Value * rain_scale, color = NULL),
-            color = "cornflowerblue", linewidth = 0.7, alpha = 0.6) +
-  geom_vline(data = shift_events, aes(xintercept = year_month), color = "pink3", alpha = 0.7) +
-  facet_wrap(~ state, scales = "free_y") + scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
-  scale_y_continuous(labels = scales::percent_format(),
-                     sec.axis = sec_axis(~ . / rain_scale, name = "Total Rainfall (in)")) +
-  labs(title = "Clade Replacement Events & Rainfall by State", x="Month", y="Prevalence", color="Clade") +
-  theme_classic() + theme(axis.text.x = element_text(angle = 45, hjust = 1),
-        strip.text = element_text(face = "bold"))
-#state_shifts_rain
 
 
 
@@ -492,8 +510,8 @@ states <- states %>% filter(state != "Alaska")
 states <- states %>% filter(state != "Hawaii")
 
 ## filter states for inclusion
-states <- states %>% filter(!is.na(n_sequences))
-#states <- states %>% filter(n_sequences>=10)
+#states <- states %>% filter(!is.na(n_sequences))
+states <- states %>% filter(n_sequences>=10)
 
 ## swine centers for each state
 ## pulled just looking at the ESRI map lol will do more formally later
@@ -507,11 +525,11 @@ US_samples <- ggplot() + geom_sf(data = states, aes(fill = n_sequences)) +
 
 
 ## KDE for node density surfaces within subclades??
-tree_files <- list(
-  "1990.4.a"   = "C:/Users/cgait/OneDrive/Desktop/BEAST runs/1990_1990.4.a_v2/mcc_1990.4.a_v2.trees",
-  "2010.1like" = "C:/Users/cgait/OneDrive/Desktop/BEAST runs/1990_2010.1like_v2/mcc_1990_2010.1like.trees",
-  "2010.2"     = "C:/Users/cgait/OneDrive/Desktop/2010.2_v1/2010.2_v1.trees",
-  "1990.4.b"   = "C:/Users/cgait/OneDrive/Desktop/1990.4b_v1/1990.4.b1b2_v1.trees")
+#tree_files <- list(
+#  "1990.4.a"   = "C:/Users/cgait/OneDrive/Desktop/BEAST runs/1990_1990.4.a_v2/mcc_1990.4.a_v2.trees",
+#  "2010.1like" = "C:/Users/cgait/OneDrive/Desktop/BEAST runs/1990_2010.1like_v2/mcc_1990_2010.1like.trees",
+#  "2010.2"     = "C:/Users/cgait/OneDrive/Desktop/2010.2_v1/2010.2_v1.trees",
+#  "1990.4.b"   = "C:/Users/cgait/OneDrive/Desktop/1990.4b_v1/1990.4.b1b2_v1.trees")
 
 
 ## Returns a named list of ggplot objects, and writes a PNG for each.
