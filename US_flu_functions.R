@@ -1,6 +1,6 @@
 ## Functions for US_flu script
 
-## part three: continuous trait diffusion ----
+## part two: continuous trait diffusion ----
 ## ── 3. Helper: build a single clade XML ─────────────────────────────────────
 ## v2: enforced monophyly + uncorrelated log-normal relaxed clock (UCLD)
 ##     following Ebola/WNV phylogeography approach (Dudas & Rambaut 2014,
@@ -467,3 +467,397 @@ build_clade_xml <- function(clade_name, clade_tips, tip_meta_df,
   return(list(xml = xml_out, file_stem = file_stem, n_tips = length(keep),
               n_dropped = n_dropped))
 }
+
+
+## part three: time-series models -----
+
+# Functions for modeling the monthly prevalence of an INDIVIDUAL clade
+# (e.g. "2010.1like", "1990.4.a") in a state as an ARIMAX outcome, with
+# weighted climate variables as predictors (trending temps detrended), an
+# AIC comparison across predictors, a (p,q) sensitivity sweep at a
+# programmatically chosen d, and residual checks.
+#
+# Pure function definitions only -- source() this from your analysis script.
+# Required packages (load them in your analysis script):
+#   tidyverse, lubridate, forecast, tseries, gt, scales
+#
+# Expected inputs (same objects as part 3A):
+#   state_prev        : year_month, state, clade, count, total, prevalence
+#   climate_state_wt  : STATE_NAME, year, month, tmax..abs_humidity
+
+# Default climate variables and which ones get detrended (the temps that
+# showed a significant linear trend in part 3A).
+clade_clim_vars    <- c("tmax", "tmin", "tavg", "ppt", "vap", "ws", "abs_humidity")
+clade_detrend_vars <- c("tmax", "tmin", "tavg")
+
+
+# predictor_columns(): names of the columns fed to models = detrended temps
+# (*_dt) + the remaining climate vars used raw.
+
+predictor_columns <- function(clim_vars = clade_clim_vars,
+                              detrend_vars = clade_detrend_vars) {
+  c(paste0(detrend_vars, "_dt"), base::setdiff(clim_vars, detrend_vars))
+}
+
+
+# build_clade_series(): monthly prevalence of ONE clade in ONE state on a
+# complete monthly grid. Distinguishes true zeros (state sequenced that month
+# but not this clade -> prev = 0) from missing months (no sequencing -> NA).
+#   prev      = n_clade / n_total
+#   emp_logit = log((n_clade + 0.5) / (n_total - n_clade + 0.5))   [0/1-safe]
+
+build_clade_series <- function(state_prev, st, focal_clade, date_start, date_end) {
+  grid <- tibble::tibble(date  = seq(date_start, date_end, by = "month"),
+                         state = st)
+  
+  totals <- state_prev %>%
+    dplyr::filter(state == st) %>%
+    dplyr::distinct(year_month, total) %>%
+    dplyr::transmute(date = as.Date(year_month), n_total = total)
+  
+  focal <- state_prev %>%
+    dplyr::filter(state == st, clade == focal_clade) %>%
+    dplyr::transmute(date = as.Date(year_month), n_clade = count)
+  
+  grid %>%
+    dplyr::left_join(totals, by = "date") %>%
+    dplyr::left_join(focal,  by = "date") %>%
+    dplyr::mutate(
+      # sequenced month but clade absent -> true zero; no sequencing -> NA
+      n_clade   = dplyr::if_else(!is.na(n_total) & is.na(n_clade), 0L, n_clade),
+      prev      = n_clade / n_total,
+      emp_logit = log((n_clade + 0.5) / (n_total - n_clade + 0.5))) %>%
+    dplyr::arrange(date)
+}
+
+
+# build_state_clade_data(): join the clade outcome to that state's climate and
+# detrend the flagged temperature predictors (residual of value ~ time index).
+# Returns the per-(state, clade) modeling frame.
+
+build_state_clade_data <- function(state_prev, climate_state_wt, st, focal_clade,
+                                   date_start, date_end,
+                                   clim_vars = clade_clim_vars,
+                                   detrend_vars = clade_detrend_vars) {
+  out <- build_clade_series(state_prev, st, focal_clade, date_start, date_end)
+  
+  cl <- climate_state_wt %>%
+    dplyr::mutate(date = as.Date(sprintf("%d-%02d-01", year, month))) %>%
+    dplyr::rename(state = STATE_NAME) %>%
+    dplyr::filter(state == st, date >= date_start, date <= date_end) %>%
+    dplyr::select(date, dplyr::all_of(clim_vars))
+  
+  df <- out %>%
+    dplyr::left_join(cl, by = "date") %>%
+    dplyr::arrange(date) %>%
+    dplyr::mutate(t_index = as.numeric(difftime(date, min(date), units = "days")))
+  
+  for (v in detrend_vars) {
+    df[[paste0(v, "_dt")]] <-
+      as.numeric(resid(lm(df[[v]] ~ df$t_index, na.action = na.exclude)))
+  }
+  attr(df, "state") <- st
+  attr(df, "clade") <- focal_clade
+  df
+}
+
+
+# get_outcome(): pull the outcome as a ts on the chosen scale.
+#   "logit" (recommended; variance-stabilized) or "prev" (raw proportion).
+
+get_outcome <- function(df, scale = c("logit", "prev"), freq = 12) {
+  scale <- match.arg(scale)
+  v <- if (scale == "logit") df$emp_logit else df$prev
+  ts(as.numeric(v), frequency = freq)
+}
+
+
+# choose_differencing(): pick d (KPSS via ndiffs) and seasonal D (nsdiffs),
+# with optional manual overrides. Gaps are interpolated ONLY for the tests;
+# model fits keep the real NAs. Returns d, D, test p-values, n_obs.
+
+choose_differencing <- function(y, seasonal, freq, force_d = NULL, force_D = NULL) {
+  yt   <- ts(as.numeric(y), frequency = freq)
+  yt_i <- na.omit(forecast::na.interp(yt))
+  
+  d <- if (!is.null(force_d)) as.integer(force_d) else forecast::ndiffs(yt_i, test = "kpss")
+  D <- if (!is.null(force_D)) as.integer(force_D)
+  else if (seasonal && freq > 1)
+    tryCatch(forecast::nsdiffs(ts(yt_i, frequency = freq)), error = function(e) 0L)
+  else 0L
+  
+  list(d = as.integer(d), D = as.integer(D),
+       kpss_p   = suppressWarnings(tseries::kpss.test(yt_i)$p.value),
+       adf_p    = suppressWarnings(tseries::adf.test(yt_i)$p.value),
+       n_obs    = sum(!is.na(as.numeric(y))),
+       forced_d = !is.null(force_d),
+       forced_D = !is.null(force_D))
+}
+
+
+# fit_arimax_by_predictor(): for each climate predictor (entered singly as
+# xreg) plus a no-predictor baseline, let auto.arima pick the order and record
+# AIC/AICc/BIC. Used to rank which climate variable best explains the clade.
+
+fit_arimax_by_predictor <- function(df, st, focal_clade,
+                                    predictors = predictor_columns(),
+                                    scale = "logit", seasonal = TRUE, freq = 12) {
+  y <- get_outcome(df, scale, freq)
+  
+  one <- function(label, xreg) {
+    fit <- tryCatch(
+      forecast::auto.arima(y, xreg = xreg, seasonal = seasonal,
+                           stepwise = TRUE, approximation = FALSE),
+      error = function(e) NULL)
+    if (is.null(fit)) return(NULL)
+    ord <- forecast::arimaorder(fit)
+    tibble::tibble(
+      state = st, clade = focal_clade, predictor = label,
+      order = sprintf("(%d,%d,%d)", ord["p"], ord["d"], ord["q"]),
+      seasonal = if (seasonal && length(ord) >= 6)
+        sprintf("(%d,%d,%d)[%d]", ord["P"], ord["D"], ord["Q"], freq) else "-",
+      n_obs = sum(!is.na(y)),
+      AIC = round(fit$aic, 2), AICc = round(fit$aicc, 2), BIC = round(fit$bic, 2))
+  }
+  
+  dplyr::bind_rows(
+    one("none (baseline)", NULL),
+    purrr::map(predictors, ~ one(.x, df[[.x]]))
+  ) %>%
+    dplyr::mutate(delta_AIC = round(AIC - min(AIC, na.rm = TRUE), 2)) %>%
+    dplyr::arrange(AIC)
+}
+
+
+# arimax_sensitivity_grid(): sweep (p, q) at a FIXED d and seasonal (P, D, Q),
+# so AICc/ΔAICc are comparable across every cell. Returns the grid.
+
+arimax_sensitivity_grid <- function(df, predictor, scale, seasonal, freq,
+                                    p_range, q_range, d, seasonal_PQ, D) {
+  y  <- get_outcome(df, scale, freq)
+  xr <- df[[predictor]]
+  s_order <- c(seasonal_PQ[1], D, seasonal_PQ[2])
+  
+  tidyr::expand_grid(p = p_range, q = q_range) %>%
+    purrr::pmap_dfr(function(p, q) {
+      fit <- suppressWarnings(tryCatch(
+        forecast::Arima(y, order = c(p, d, q),
+                        seasonal = list(order = s_order, period = freq),
+                        xreg = xr, method = "ML"),
+        error = function(e) NULL))
+      tibble::tibble(
+        p, d, q,
+        n_par     = if (is.null(fit)) NA_integer_ else length(fit$coef),
+        AIC       = if (is.null(fit)) NA_real_ else round(fit$aic, 2),
+        AICc      = if (is.null(fit)) NA_real_ else round(fit$aicc, 2),
+        BIC       = if (is.null(fit)) NA_real_ else round(fit$bic, 2),
+        converged = !is.null(fit))
+    }) %>%
+    dplyr::mutate(delta_AICc = round(AICc - min(AICc, na.rm = TRUE), 2)) %>%
+    dplyr::arrange(AICc)
+}
+
+
+# run_clade_arimax(): orchestrator for ONE (state, clade). Builds data, ranks
+# predictors, chooses d/D (flagged via message), runs the (p,q) sweep on the
+# best predictor, and returns everything in a list.
+
+run_clade_arimax <- function(state_prev, climate_state_wt, st, focal_clade,
+                             date_start, date_end,
+                             scale = "logit", seasonal = TRUE,
+                             clim_vars = clade_clim_vars,
+                             detrend_vars = clade_detrend_vars,
+                             p_range = 0:3, q_range = 0:3, seasonal_PQ = c(1, 0),
+                             force_d = NULL, force_D = NULL, verbose = TRUE) {
+  freq <- if (seasonal) 12 else 1
+  
+  df <- build_state_clade_data(state_prev, climate_state_wt, st, focal_clade,
+                               date_start, date_end, clim_vars, detrend_vars)
+  preds <- predictor_columns(clim_vars, detrend_vars)
+  
+  pred_res  <- fit_arimax_by_predictor(df, st, focal_clade, preds, scale, seasonal, freq)
+  best_pred <- pred_res %>%
+    dplyr::filter(predictor != "none (baseline)") %>%
+    dplyr::slice_min(AIC, n = 1, with_ties = FALSE) %>%
+    dplyr::pull(predictor)
+  
+  dsel <- choose_differencing(get_outcome(df, scale, freq), seasonal, freq, force_d, force_D)
+  
+  if (verbose) message(sprintf(
+    paste0(">> %s ~ %s [clade outcome] | n_obs = %d\n",
+           ">> Chosen d = %d (KPSS p = %.3f, ADF p = %.3f)%s | seasonal D = %d%s\n",
+           ">> d and D fixed for the sweep -> AICc comparable across all cells."),
+    st, focal_clade, dsel$n_obs,
+    dsel$d, dsel$kpss_p, dsel$adf_p, if (dsel$forced_d) " [forced]" else "",
+    dsel$D, if (dsel$forced_D) " [forced]" else ""))
+  
+  sens <- arimax_sensitivity_grid(df, best_pred, scale, seasonal, freq,
+                                  p_range, q_range, dsel$d, seasonal_PQ, dsel$D)
+  
+  list(state = st, clade = focal_clade, data = df,
+       predictor_results = pred_res, best_predictor = best_pred,
+       differencing = dsel, sensitivity = sens,
+       params = list(scale = scale, seasonal = seasonal, freq = freq,
+                     seasonal_PQ = seasonal_PQ))
+}
+
+
+# render_predictor_table(): shaded gt of the per-predictor AIC comparison.
+
+render_predictor_table <- function(run) {
+  r <- run$predictor_results
+  r %>%
+    dplyr::select(predictor, order, seasonal, n_obs, AIC, delta_AIC) %>%
+    gt::gt() %>%
+    gt::data_color(columns = delta_AIC,
+                   fn = scales::col_numeric(c("#1a9850", "#ffffbf", "#d73027"),
+                                            domain = range(r$delta_AIC, na.rm = TRUE),
+                                            na.color = "grey85")) %>%
+    gt::tab_header(
+      title = gt::md(sprintf("**Predictor comparison — %s ~ climate (%s)**",
+                             run$state, run$clade)),
+      subtitle = "One climate predictor per model; temps detrended. Ranked by AIC.") %>%
+    gt::cols_label(predictor = "Predictor (xreg)", delta_AIC = "ΔAIC")
+}
+
+
+# render_sensitivity_table(): shaded gt of the (p,q) sweep at fixed d/D.
+
+render_sensitivity_table <- function(run) {
+  s <- run$sensitivity; d <- run$differencing; pq <- run$params$seasonal_PQ
+  fixed_label <- sprintf("d = %d, seasonal (%d,%d,%d)[%d] — fixed",
+                         d$d, pq[1], d$D, pq[2], run$params$freq)
+  s %>%
+    dplyr::transmute(order = sprintf("(%d,%d,%d)", p, d, q),
+                     n_par, AIC, AICc, BIC, delta_AICc, converged) %>%
+    gt::gt() %>%
+    gt::data_color(columns = delta_AICc,
+                   fn = scales::col_numeric(c("#1a9850", "#ffffbf", "#d73027"),
+                                            domain = range(s$delta_AICc, na.rm = TRUE),
+                                            na.color = "grey85")) %>%
+    gt::tab_header(
+      title = gt::md(sprintf("**ARIMA(p,d,q) sensitivity — %s ~ %s (%s)**",
+                             run$state, run$best_predictor, run$clade)),
+      subtitle = gt::md(sprintf("%s • KPSS p = %.3f, ADF p = %.3f • ΔAICc comparable across all rows",
+                                fixed_label, d$kpss_p, d$adf_p))) %>%
+    gt::cols_label(n_par = "k", delta_AICc = "ΔAICc")
+}
+
+
+# render_sensitivity_heatmap(): ΔAICc over the (p,q) plane at the fixed d.
+
+render_sensitivity_heatmap <- function(run) {
+  s <- run$sensitivity; d <- run$differencing; pq <- run$params$seasonal_PQ
+  fixed_label <- sprintf("d = %d, seasonal (%d,%d,%d)[%d]",
+                         d$d, pq[1], d$D, pq[2], run$params$freq)
+  ggplot2::ggplot(s, ggplot2::aes(factor(p), factor(q), fill = delta_AICc)) +
+    ggplot2::geom_tile(color = "white", linewidth = 0.5) +
+    ggplot2::geom_text(ggplot2::aes(
+      label = ifelse(is.na(delta_AICc), "×", sprintf("%.1f", delta_AICc))), size = 3) +
+    ggplot2::scale_fill_viridis_c(direction = -1, na.value = "grey85", name = "ΔAICc") +
+    ggplot2::labs(
+      title = sprintf("Order sensitivity: %s ~ %s (%s)",
+                      run$state, run$best_predictor, run$clade),
+      subtitle = sprintf("%s • × = did not converge", fixed_label),
+      x = "AR order (p)", y = "MA order (q)") +
+    ggplot2::theme_minimal(base_size = 11)
+}
+
+
+# check_clade_model(): refit the best (min-AICc) order from the sweep and run
+# residual diagnostics. Returns the fitted model invisibly.
+
+check_clade_model <- function(run) {
+  best <- run$sensitivity %>% dplyr::filter(converged) %>%
+    dplyr::slice_min(AICc, n = 1, with_ties = FALSE)
+  p <- run$params; d <- run$differencing
+  y  <- get_outcome(run$data, p$scale, p$freq)
+  xr <- run$data[[run$best_predictor]]
+  fit <- forecast::Arima(
+    y, order = c(best$p, best$d, best$q),
+    seasonal = list(order = c(p$seasonal_PQ[1], d$D, p$seasonal_PQ[2]), period = p$freq),
+    xreg = xr, method = "ML")
+  print(forecast::checkresiduals(fit))
+  invisible(fit)
+}
+
+
+## part four: maps ----
+
+make_diffusion_map <- function(tree_file,
+                               subclade_name,
+                               lat_col          = "location1",
+                               lon_col          = "location2",
+                               pad              = 0.2,
+                               bw_mult_lon      = 1.1,
+                               bw_mult_lat      = 1.8,
+                               kde_n            = 400,
+                               density_quantile = 0.50,
+                               map_xlim         = c(-125, -72),
+                               map_ylim         = c(24, 50),
+                               states_data      = states,
+                               centers_data     = state_centers,
+                               save_path        = NULL,
+                               save_width       = 12,
+                               save_height      = 8,
+                               save_dpi         = 300) {
+  
+  ## Read tree and pull node table
+  mcc_tree  <- read.beast(tree_file)
+  node_data <- as_tibble(mcc_tree)
+  
+  ## Extract node coordinates
+  coords <- node_data %>%
+    filter(!is.na(.data[[lat_col]]), !is.na(.data[[lon_col]])) %>%
+    mutate(lat = as.numeric(.data[[lat_col]]),
+           lon = as.numeric(.data[[lon_col]])) %>%
+    dplyr::select(node, label, lat, lon, height)
+  
+  ## KDE bounds (data extent + padding)
+  lon_range <- c(min(coords$lon) - pad, max(coords$lon) + pad)
+  lat_range <- c(min(coords$lat) - pad, max(coords$lat) + pad)
+  
+  ## 2D kernel density estimate
+  kde <- MASS::kde2d(
+    x    = coords$lon,
+    y    = coords$lat,
+    n    = kde_n,
+    lims = c(lon_range, lat_range),
+    h    = c(MASS::bandwidth.nrd(coords$lon) * bw_mult_lon,
+             MASS::bandwidth.nrd(coords$lat) * bw_mult_lat)
+  )
+  
+  ## Convert KDE to data frame, keep top cells only
+  kde_df <- expand.grid(lon = kde$x, lat = kde$y) %>%
+    mutate(density = as.vector(kde$z)) %>%
+    filter(density > quantile(density, density_quantile))
+  
+  ## Build plot
+  p <- ggplot() +
+    geom_sf(data = states_data,
+            fill = "#f0ede8", color = "#d0ccc8", linewidth = 0.3) +
+    geom_tile(data = kde_df,
+              aes(x = lon, y = lat, fill = density, alpha = density)) +
+    scale_fill_scico(palette = "hawaii", direction = -1, name = "Density") +
+    scale_alpha_continuous(range = c(0.2, 0.9), guide = "none") +
+    geom_sf(data = centers_data,
+            color = "pink4", fill = "gold", size = 3, shape = 22) +
+    coord_sf(xlim = map_xlim, ylim = map_ylim, expand = FALSE) +
+    theme_classic(base_size = 12) +
+    theme(legend.position    = "right",
+          legend.key.height  = unit(1.2, "cm"),
+          plot.title         = element_text(face = "bold", size = 14),
+          axis.line          = element_blank()) +
+    labs(subtitle = sprintf("KDE of %s locations from subclade MCC tree",
+                            subclade_name), x = "", y = "")
+  
+  ## Optional save
+  if (!is.null(save_path)) {
+    ggsave(save_path, plot = p,
+           width = save_width, height = save_height,
+           dpi = save_dpi, bg = "white")
+  }
+  
+  return(p)
+}
+

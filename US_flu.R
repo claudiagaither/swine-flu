@@ -1,7 +1,7 @@
 ## H3N2 influenza A transmission among domestic swine in the US
 ## phylogeography and ecological predictors of transmission!
 
-## part zero: metadata ----
+## part one:    metadata ----
 
 source("C:/Users/cgait/OneDrive/Desktop/swine flu/US_flu_functions.R")
 library(ape)
@@ -11,8 +11,10 @@ library(conflicted)
 library(data.table)
 library(dplyr)
 library(exactextractr)
+library(forecast) 
 library(ggplot2)
 library(ggtree)
+library(gt)
 library(lubridate)
 library(MASS)
 library(msa)
@@ -31,6 +33,7 @@ library(terra)
 library(tidyr)
 library(tidyverse)
 library(tigris)
+library(tseries)  
 library(treeio)
 library(trend)
 library(viridis)
@@ -97,7 +100,7 @@ survey_weights %>% dplyr::count(survey_year) %>% arrange(survey_year)
 #loc_lon <- setNames(locations$lon, locations$state)
 
 
-## part one: MCC tree and tips ----
+## part two:    MCC tree and tips ----
 
 ## clade assignments made separately using BV-BRC
 tip_clades <- read.csv("C:/Users/cgait/OneDrive/Desktop/BEAST runs/1990 US flu/1990_v1/clade_assignment_updated.csv")
@@ -233,7 +236,7 @@ mcc_tree_pruned@phylo <- pruned_tree
 #ggsave("C:/Users/cgait/OneDrive/Desktop/clades_pruned.jpeg",width=20,height=25,units=c("cm"),tree_clade_pruned)
 
 
-## part two: random-walk diffusion xmls ----
+## part three:  random-walk diffusion xmls ----
 
 ## template XML produced by BEAUTi (contains all 4589 taxa + sequences)
 #xml_path  <- "C:/Users/cgait/OneDrive/Desktop/1990_v2/1990_USflu_tree.xml"
@@ -328,18 +331,18 @@ remove(doc, taxa_nodes, tree_clade, chain_length, log_every, out_dir, save_every
        hog_survey_03, mcc_tree, tip_dates, tree_phylo)
 
 
-## part three: time-series models ----
+## part four:   (S)ARIMA? ----
 
 ## create time-series prevalence data for each clade within each state
 ## add a year-month column for grouping
 tip_meta_assigned <- tip_meta_assigned %>% mutate(year_month = floor_date(as.Date(date), "month"))
 
-## overall monthly clade prevalence ---
+## overall monthly clade prevalence 
 overall_prev <- tip_meta_assigned %>% group_by(year_month, clade) %>% 
   summarise(count = n(), .groups = "drop") %>% group_by(year_month) %>%
   mutate(total = sum(count), prevalence = count / total) %>% ungroup()
 
-## state-level monthly clade prevalence ---
+## state-level monthly clade prevalence 
 state_prev <- tip_meta_assigned %>% group_by(year_month, state, clade) %>%
   summarise(count = n(), .groups = "drop") %>% group_by(year_month, state) %>% 
   mutate(total = sum(count), prevalence = count / total) %>% ungroup()
@@ -370,118 +373,112 @@ dominant <- dominant %>% arrange(state, year_month) %>% group_by(state) %>% muta
     prev_major %in% c("1990", "2010"), 1, 0)) %>% ungroup()
 
 
-## time series models for outcome of shifting major clade, or individual clade prevalences?
-
 # Climate trend diagnostics for time-series pre-processing
 # Goal: decide whether each weighted climate variable carries a long-term
 #       trend that should be removed before time-series modeling, and see
 #       how those trends relate to major_dominant clade shifts.
 
 clim_vars <- c("tmax", "tmin", "tavg", "ppt", "vap", "ws", "abs_humidity")
-is_major_shift <- function(df) df$major_dominant == 1
+#is_major_shift <- function(df) df$major_dominant == 1
 
-# 1. Build a proper date + long format 
+# long-format climate data
 clim <- climate_state_wt %>% mutate(date = as.Date(sprintf("%d-%02d-01", year, month)))
 clim_long <- clim %>% pivot_longer(all_of(clim_vars), names_to = "variable", values_to = "value") %>%
   mutate(variable = factor(variable, levels = clim_vars))  # keeps facet order
 clim_long <- clim_long %>% filter(date < "2024-12-31")
 clim_long <- clim_long %>% filter(date > "2014-01-01")
 
-# 2. Major-dominant shift events 
-# Per-state shift dates (for single-state overlays)...
-major_shifts <- dominant %>% filter(is_major_shift(.)) %>% transmute(state, date = as.Date(year_month)) %>% distinct()
-
-# ...and shifts-per-year aggregated across all states (for the all-state plot)
-shifts_per_year <- major_shifts %>% mutate(year = as.integer(format(date, "%Y"))) %>%
-  count(year, name = "n_shifts")
-
 # PLOT 1 — Annual means: the clearest view for spotting a removable trend
-#   - one faint line per state
-#   - one pooled linear trend (red) per variable: slope/sign = the trend
-#   - grey vertical bars mark years with many major shifts
-clim_annual <- clim_long %>% group_by(STATE_NAME, variable, year) %>%
-  summarise(value = mean(value, na.rm = TRUE), .groups = "drop")
+# one faint line per state, one pooled linear trend (red) per variable: slope/sign = the trend
+#clim_annual <- clim_long %>% group_by(STATE_NAME, variable, year) %>%
+#  summarise(value = mean(value, na.rm = TRUE), .groups = "drop")
 
 # scale shift counts to sit in the background of each free-y facet
-p1 <- ggplot(clim_annual, aes(year, value)) +
-  # shift-frequency backdrop (rescaled per facet via geom_rug-style ticks)
-  geom_vline(data = shifts_per_year %>% filter(n_shifts >= quantile(n_shifts, .75)),
-             aes(xintercept = year), color = "pink3", linewidth = 0.4) +
-  geom_line(aes(group = STATE_NAME), alpha = 0.70, color = "skyblue3") +
-  geom_smooth(aes(group = 1), method = "lm", formula = y ~ x,
-              se = TRUE, color = "tomato", linewidth = 0.9) +
-  facet_wrap(~ variable, scales = "free_y", ncol = 2) +
-  labs(title = "Annual-mean climate by state, 2014–2024",
-       subtitle = "Red = pooled linear trend; pink lines = high-shift years",
-       x = NULL, y = NULL) +
-  theme_minimal(base_size = 11)
-#print(p1)
+#p1 <- ggplot(clim_annual, aes(year, value)) +
+#             aes(xintercept = year), color = "pink3", linewidth = 0.4) +
+#  geom_line(aes(group = STATE_NAME), alpha = 0.70, color = "skyblue3") +
+#  geom_smooth(aes(group = 1), method = "lm", formula = y ~ x,
+#              se = TRUE, color = "tomato", linewidth = 0.9) +
+#  facet_wrap(~ variable, scales = "free_y", ncol = 2) +
+#  labs(title = "Annual-mean climate by state, 2014–2024",
+#       subtitle = "Red = pooled linear trend,
+#       x = NULL, y = NULL) + theme_minimal(base_size = 11)
 
 # PLOT 2 — Deseasonalized monthly anomalies: confirms trend after removing
 #          the annual cycle (anomaly = value − state-specific monthly mean)
-clim_anom <- clim_long %>% group_by(STATE_NAME, variable, month) %>%
-  mutate(anomaly = value - mean(value, na.rm = TRUE)) %>% ungroup()
+#clim_anom <- clim_long %>% group_by(STATE_NAME, variable, month) %>%
+#  mutate(anomaly = value - mean(value, na.rm = TRUE)) %>% ungroup()
 
-p2 <- ggplot(clim_anom, aes(date, anomaly)) +
-  geom_hline(yintercept = 0, color = "pink4", linewidth = 0.3) +
-  geom_line(aes(group = STATE_NAME), alpha = 0.10, color = "skyblue3") +
-  geom_smooth(aes(group = 1), method = "loess", span = 0.3,
-              se = FALSE, color = "tomato", linewidth = 0.9) +
-  facet_wrap(~ variable, scales = "free_y", ncol = 2) +
-  labs(title = "Deseasonalized monthly anomalies, 2014–2024",
-       subtitle = "Red loess on anomalies: a sloping line = residual trend to remove",
-       x = NULL, y = "Anomaly (value − monthly climatology)") +
-  theme_minimal(base_size = 11)
+#p2 <- ggplot(clim_anom, aes(date, anomaly)) +
+#  geom_hline(yintercept = 0, color = "pink4", linewidth = 0.3) +
+#  geom_line(aes(group = STATE_NAME), alpha = 0.10, color = "skyblue3") +
+#  geom_smooth(aes(group = 1), method = "loess", span = 0.3,
+#              se = FALSE, color = "tomato", linewidth = 0.9) +
+#  facet_wrap(~ variable, scales = "free_y", ncol = 2) +
+#  labs(title = "Deseasonalized monthly anomalies, 2014–2024",
+#       subtitle = "Red loess on anomalies: a sloping line = residual trend to remove",
+#       x = NULL, y = "Anomaly (value − monthly climatology)") + theme_minimal(base_size = 11)
 
-# PLOT 3 — Single-state detail with that state's major shifts as vlines.
-#          Overlaying per-state events only makes sense within one state.
-plot_one_state <- function(state_name) {
-  d  <- filter(clim_long, STATE_NAME == state_name)
-  sh <- filter(major_shifts, state == state_name)
-  ggplot(d, aes(date, value)) +
-    geom_vline(data = sh, aes(xintercept = date),
-               color = "magenta", alpha = 0.5, linewidth = 0.4) +
-    geom_line(color = "skyblue3", linewidth = 0.3) +
-    geom_smooth(method = "lm", formula = y ~ x, se = FALSE,
-                color = "tomato", linewidth = 0.7) +
-    facet_wrap(~ variable, scales = "free_y", ncol = 2) +
-    labs(title = paste0(state_name, ": monthly climate vs. major clade shifts"),
-         subtitle = "Pink lines = major_dominant shifts; red = linear trend",
-         x = NULL, y = NULL) +
-    theme_minimal(base_size = 11)
-}
+# PLOT 3 — Single-state detail 
+#plot_one_state <- function(state_name) {
+#  d  <- filter(clim_long, STATE_NAME == state_name)
+#  ggplot(d, aes(date, value)) +
+#    geom_line(color = "skyblue3", linewidth = 0.3) +
+#    geom_smooth(method = "lm", formula = y ~ x, se = FALSE,
+#                color = "tomato", linewidth = 0.7) +
+#    facet_wrap(~ variable, scales = "free_y", ncol = 2) +
+#    labs(title = paste0(state_name, ": monthly climate vs. major clade shifts"),
+#    subtitle = "Red = linear trend", x = NULL, y = NULL) + theme_minimal(base_size = 11)
+#}
 
 # QUANTITATIVE BACKUP — slope, significance, and (optional) Mann-Kendall
 #   per variable on the pooled annual means. Use this to decide objectively
 #   which variables actually need detrending vs. which are flat.
 
-trend_summary <- clim_annual %>% group_by(variable) %>%
-  group_modify(~{
-    fit <- lm(value ~ year, data = .x)
-    tibble(slope_per_year = coef(fit)[["year"]],
-           p_value        = summary(fit)$coefficients["year", "Pr(>|t|)"],
-           total_change   = coef(fit)[["year"]] * (max(.x$year) - min(.x$year))
-      # , mk_p = trend::mk.test(
-      #     .x %>% group_by(year) %>% summarise(v = mean(value)) %>% pull(v))$p.value
-    )}) %>% ungroup() %>% arrange(p_value)
+#trend_summary <- clim_annual %>% group_by(variable) %>%
+#  group_modify(~{
+#    fit <- lm(value ~ year, data = .x)
+#    tibble(slope_per_year = coef(fit)[["year"]],
+#           p_value        = summary(fit)$coefficients["year", "Pr(>|t|)"],
+#           total_change   = coef(fit)[["year"]] * (max(.x$year) - min(.x$year))
+#      # , mk_p = trend::mk.test(
+#      #     .x %>% group_by(year) %>% summarise(v = mean(value)) %>% pull(v))$p.value
+#    )}) %>% ungroup() %>% arrange(p_value)
 
 #print(p1)
 #print(p2)
 #print(plot_one_state("North Carolina"))
 #print(plot_one_state("Iowa"))
-
 #print(trend_summary)
 ## based on the trend summary, the slope for max temp and avg temp have p values under 0.05
 ## min temp has a p-value of 0.0544, but others are all over 0.10
 
+# part three B: ARIMA parameterization sensitivity 
+# Picks the differencing order d (and seasonal D) PROGRAMMATICALLY via unit-root
+# tests, flags the choice, then sweeps only (p, q) at that fixed d/D. Because
+# d and D are constant across every model, the AICc / ΔAICc column in the final
+# output is fully comparable -- no cross-d apples-to-oranges problem.
+
+#ds <- as.Date("2014-01-01"); de <- as.Date("2024-12-01")
+#run_2010 <- run_clade_arimax(state_prev, climate_state_wt, "Iowa", "2010.1like", ds, de)
+
+#run_2010$predictor_results      # which climate var best explains the clade
+#render_predictor_table(run_2010)
+#render_sensitivity_table(run_2010)
+#render_sensitivity_heatmap(run_2010)
+#check_clade_model(run_2010)      # residual diagnostics on the winning order
 
 
-## fit models for the outcome of major dominant, within 2014-2024?
+## expand to multiple states and clades
+combos <- expand_grid(state = c("Iowa","Nebraska","Missouri","North Carolina"),
+                      clade = c("2010.1like","1990.4.a"))
+runs <- pmap(combos, ~ run_clade_arimax(state_prev, climate_state_wt, ..1, ..2, ds, de))
+all_predictor_aic <- map_dfr(runs, "predictor_results")   # stacked, has state+clade cols
+
+## summarize top predictors for both clades within each state?
 
 
-
-
-## part four: maps ----
+## part five:   maps ----
 
 ## density of samples from each state
 ## pull table of all unique state names and number of sequences from each, including those with no state
