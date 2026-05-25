@@ -1,6 +1,6 @@
 ## Functions for US_flu script
 
-## part two: continuous trait diffusion ----
+## part three: continuous trait diffusion ----
 ## ── 3. Helper: build a single clade XML ─────────────────────────────────────
 ## v2: enforced monophyly + uncorrelated log-normal relaxed clock (UCLD)
 ##     following Ebola/WNV phylogeography approach (Dudas & Rambaut 2014,
@@ -469,7 +469,7 @@ build_clade_xml <- function(clade_name, clade_tips, tip_meta_df,
 }
 
 
-## part three: time-series models -----
+## part four: time-series models -----
 
 # Functions for modeling the monthly prevalence of an INDIVIDUAL clade
 # (e.g. "2010.1like", "1990.4.a") in a state as an ARIMAX outcome, with
@@ -779,6 +779,296 @@ check_clade_model <- function(run) {
     xreg = xr, method = "ML")
   print(forecast::checkresiduals(fit))
   invisible(fit)
+}
+
+
+
+# ============================================================================
+# Part four (cont.): predictor significance for the selected ARIMAX models
+# ----------------------------------------------------------------------------
+# Consume the `run` objects from run_clade_arimax() and produce inference on
+# the SELECTED climate predictor. Analysis is exploratory: the outcome is clade
+# prevalence among publicly deposited sequences (convenience sample), so this
+# is association within sampled sequences, not population clade prevalence.
+# ARIMA coefficients use asymptotic (Wald) normal inference -> z-tests, not
+# t-tests. SE = sqrt(diag(var.coef)). Outcome is logit, so exp(coef) is an OR.
+# ============================================================================
+
+
+# refit_best_model(): refit the min-AICc order from the sweep with a NAMED
+# one-column xreg, so the climate coefficient carries the predictor's name
+# (an unnamed numeric vector would be labelled "xreg"). Shared helper so the
+# diagnostics and the significance table describe the exact same fitted model.
+
+refit_best_model <- function(run) {
+  best <- run$sensitivity %>%
+    dplyr::filter(converged) %>%
+    dplyr::slice_min(AICc, n = 1, with_ties = FALSE)
+  if (nrow(best) == 0L)
+    stop("No converged model in the sensitivity grid for ",
+         run$state, " / ", run$clade)
+
+  p <- run$params; d <- run$differencing
+  y  <- get_outcome(run$data, p$scale, p$freq)
+  xr <- matrix(run$data[[run$best_predictor]], ncol = 1,
+               dimnames = list(NULL, run$best_predictor))
+
+  fit <- forecast::Arima(
+    y, order = c(best$p, best$d, best$q),
+    seasonal = list(order = c(p$seasonal_PQ[1], d$D, p$seasonal_PQ[2]),
+                    period = p$freq),
+    xreg = xr, method = "ML")
+  attr(fit, "best_order") <- best
+  fit
+}
+
+
+# arimax_wald(): Wald table (estimate / SE / z / p / 95% CI) for ALL terms of
+# a fitted Arima object. var.coef names align with coef names; we reindex SEs
+# defensively in case any coefficient was held fixed.
+
+arimax_wald <- function(fit) {
+  est <- fit$coef
+  se  <- sqrt(diag(fit$var.coef))[names(est)]
+  z   <- est / se
+  tibble::tibble(
+    term      = names(est),
+    estimate  = as.numeric(est),
+    std_error = as.numeric(se),
+    z         = as.numeric(z),
+    p_value   = 2 * stats::pnorm(-abs(as.numeric(z))),
+    ci_lower  = as.numeric(est - 1.96 * se),
+    ci_upper  = as.numeric(est + 1.96 * se))
+}
+
+
+# predictor_significance(): one row of inference for the SELECTED climate
+# predictor of a single run, on its best-AICc order. Adds odds-ratio columns
+# when the outcome is on the logit scale.
+
+predictor_significance <- function(run) {
+  fit  <- refit_best_model(run)
+  best <- attr(fit, "best_order")
+  w    <- arimax_wald(fit)
+
+  term <- run$best_predictor
+  if (!term %in% w$term) term <- "xreg"          # fallback if unnamed
+  row  <- w[w$term == term, ]
+
+  base_aic <- run$predictor_results$AIC[
+    run$predictor_results$predictor == "none (baseline)"]
+  pred_aic <- run$predictor_results$AIC[
+    run$predictor_results$predictor == run$best_predictor]
+
+  out <- tibble::tibble(
+    state        = run$state,
+    clade        = run$clade,
+    predictor    = run$best_predictor,
+    order        = sprintf("(%d,%d,%d)", best$p, best$d, best$q),
+    n_obs        = sum(!is.na(get_outcome(run$data, run$params$scale, run$params$freq))),
+    estimate     = round(row$estimate, 4),
+    std_error    = round(row$std_error, 4),
+    z            = round(row$z, 3),
+    p_value      = signif(row$p_value, 3),
+    ci_lower     = round(row$ci_lower, 4),
+    ci_upper     = round(row$ci_upper, 4),
+    # does adding this predictor actually beat the no-climate baseline?
+    delta_AIC_vs_baseline = round(pred_aic - base_aic, 2))
+
+  if (identical(run$params$scale, "logit")) {
+    out <- dplyr::mutate(out,
+      OR       = round(exp(estimate), 3),
+      OR_lower = round(exp(ci_lower), 3),
+      OR_upper = round(exp(ci_upper), 3))
+  }
+  out
+}
+
+
+# build_predictor_summary(): stack predictor_significance() over a list of runs
+# (e.g. the `runs` from pmap over your state x clade grid). Set adjust = TRUE
+# to add a Benjamini-Hochberg FDR column across the whole family of tests.
+
+build_predictor_summary <- function(runs, adjust = TRUE) {
+  tbl <- purrr::map_dfr(runs, predictor_significance) %>%
+    dplyr::arrange(state, clade)
+  if (adjust)
+    tbl <- dplyr::mutate(tbl, p_BH = signif(stats::p.adjust(p_value, "BH"), 3))
+  tbl
+}
+
+
+# render_significance_table(): shaded gt of the selected-predictor inference,
+# grouped by state. Shades the p column (green = small).
+
+render_significance_table <- function(sig_tbl, by_state = TRUE) {
+  has_or <- "OR" %in% names(sig_tbl)
+  p_col  <- if ("p_BH" %in% names(sig_tbl)) "p_BH" else "p_value"
+
+  keep <- c("clade", "predictor", "order", "n_obs",
+            if (has_or) c("OR", "OR_lower", "OR_upper")
+            else c("estimate", "ci_lower", "ci_upper"),
+            "z", "p_value", if ("p_BH" %in% names(sig_tbl)) "p_BH",
+            "delta_AIC_vs_baseline")
+
+  g <- sig_tbl %>%
+    dplyr::select(state, dplyr::all_of(keep)) %>%
+    { if (by_state) gt::gt(., groupname_col = "state") else gt::gt(.) } %>%
+    gt::data_color(
+      columns = dplyr::all_of(p_col),
+      fn = scales::col_numeric(c("#1a9850", "#ffffbf", "#d73027"),
+                               domain = c(0, 1), na.color = "grey85")) %>%
+    gt::tab_header(
+      title = gt::md("**Selected climate predictor per state x clade**"),
+      subtitle = gt::md(paste0(
+        "ARIMAX xreg coefficient at the best-AICc order. ",
+        "Wald (z) inference; outcome = logit prevalence",
+        if (has_or) "; OR = exp(coef)." else "."))) %>%
+    gt::tab_source_note(gt::md(
+      "_Exploratory: outcome is clade prevalence among publicly deposited "
+    )) %>%
+    gt::tab_source_note(gt::md(
+      "_sequences (convenience sample), and the predictor is chosen by AIC then "
+    )) %>%
+    gt::tab_source_note(gt::md(
+      "_tested on the same series, so p-values are associational only._"))
+
+  if (has_or)
+    g <- gt::cols_label(g, OR_lower = "OR 2.5%", OR_upper = "OR 97.5%",
+                        delta_AIC_vs_baseline = "dAIC vs base")
+  else
+    g <- gt::cols_label(g, ci_lower = "2.5%", ci_upper = "97.5%",
+                        delta_AIC_vs_baseline = "dAIC vs base")
+  g
+}
+
+
+# coef_stability(): refit the SELECTED predictor across every (p,q) cell of the
+# sweep and report its coefficient, z and p in each. Answers "is this predictor
+# robustly associated, or only at the order AIC happened to pick?" -- a stronger
+# robustness statement than a single p-value, and free since the grid exists.
+
+coef_stability <- function(run) {
+  p <- run$params; d <- run$differencing
+  y  <- get_outcome(run$data, p$scale, p$freq)
+  nm <- run$best_predictor
+  xr <- matrix(run$data[[nm]], ncol = 1, dimnames = list(NULL, nm))
+
+  run$sensitivity %>%
+    dplyr::filter(converged) %>%
+    dplyr::select(p, d, q) %>%
+    purrr::pmap_dfr(function(p_, d_, q_) {
+      fit <- tryCatch(forecast::Arima(
+        y, order = c(p_, d_, q_),
+        seasonal = list(order = c(p$seasonal_PQ[1], d$D, p$seasonal_PQ[2]),
+                        period = p$freq),
+        xreg = xr, method = "ML"), error = function(e) NULL)
+      if (is.null(fit)) return(NULL)
+      term <- if (nm %in% names(fit$coef)) nm else "xreg"
+      est  <- fit$coef[[term]]
+      se   <- sqrt(diag(fit$var.coef))[[term]]
+      z    <- est / se
+      tibble::tibble(
+        state = run$state, clade = run$clade, predictor = nm,
+        order = sprintf("(%d,%d,%d)", p_, d_, q_),
+        estimate = round(est, 4), z = round(z, 3),
+        p_value = signif(2 * stats::pnorm(-abs(z)), 3),
+        sig05 = abs(z) > 1.96)
+    }) %>%
+    dplyr::arrange(dplyr::desc(sig05), p_value)
+}
+
+
+# stability_summary(): collapse coef_stability() to one line per run -- share of
+# orders where the predictor is significant and whether the sign ever flips.
+
+stability_summary <- function(runs) {
+  purrr::map_dfr(runs, function(r) {
+    s <- coef_stability(r)
+    tibble::tibble(
+      state = r$state, clade = r$clade, predictor = r$best_predictor,
+      n_orders      = nrow(s),
+      pct_sig_05    = round(100 * mean(s$sig05), 1),
+      sign_consistent = length(unique(sign(s$estimate))) == 1L,
+      median_estimate = round(stats::median(s$estimate), 4))
+  }) %>% dplyr::arrange(state, clade)
+}
+
+
+
+# reorder_within() / scale_y_reordered(): small tidytext-style helpers so the
+# state rows can be ordered by effect size INDEPENDENTLY within each clade
+# facet (a state has a different OR in each clade). Dependency-free.
+
+reorder_within <- function(x, by, within, fun = mean, sep = "___", ...) {
+  stats::reorder(paste(x, within, sep = sep), by, FUN = fun, ...)
+}
+scale_y_reordered <- function(..., sep = "___") {
+  ggplot2::scale_y_discrete(labels = function(x) gsub(paste0(sep, ".+$"), "", x), ...)
+}
+
+
+# forest_predictor(): faceted forest plot of the SELECTED predictor's effect,
+# one panel per clade, one row per state, colored by which predictor was
+# chosen. Uses OR (log x-axis, null = 1) when the table carries OR columns,
+# else the raw coefficient (null = 0). Feed it build_predictor_summary().
+
+forest_predictor <- function(sig_tbl, ncol = NULL, point_size = 3.2,
+                             state_levels = NULL, base_size = 13,
+                             sig_level = 0.10) {
+  has_or <- "OR" %in% names(sig_tbl)
+  d <- sig_tbl
+  if (has_or) {
+    d$est <- d$OR; d$lo <- d$OR_lower; d$hi <- d$OR_upper
+    null_line <- 1; xlab <- "Odds ratio (95% CI), log scale"; null_lab <- "OR = 1"
+  } else {
+    d$est <- d$estimate; d$lo <- d$ci_lower; d$hi <- d$ci_upper
+    null_line <- 0; xlab <- "xreg coefficient (95% CI)"; null_lab <- "coef = 0"
+  }
+  # one SHARED, fixed state order across both clade facets so rows line up and
+  # you can read straight across the two clades. Pass state_levels to override.
+  if (is.null(state_levels)) state_levels <- sort(unique(d$state))
+  d$state <- factor(d$state, levels = rev(state_levels))
+  # significance from the BH-adjusted p (falls back to raw p if absent).
+  # Filled point if p < sig_level, hollow otherwise. NB: keyed to the
+  # adjusted p, so a filled point need not have a CI clear of the null.
+  pcol  <- if ("p_BH" %in% names(d)) d$p_BH else d$p_value
+  p_src <- if ("p_BH" %in% names(d)) "BH p" else "p"
+  d$sig <- pcol < sig_level
+  lab_t <- sprintf("%s < %.2g", p_src, sig_level)
+  lab_f <- sprintf("%s \u2265 %.2g", p_src, sig_level)
+
+  p <- ggplot2::ggplot(d, ggplot2::aes(est, state, color = predictor)) +
+    ggplot2::geom_vline(xintercept = null_line, linetype = "dashed",
+                        color = "grey50") +
+    ggplot2::annotate("text", x = null_line, y = -Inf, label = null_lab,
+                      angle = 90, hjust = -0.05, vjust = -0.4,
+                      size = base_size / 3.2, color = "grey45") +
+    ggplot2::geom_errorbar(ggplot2::aes(xmin = lo, xmax = hi),
+                           orientation = "y", width = 0.25, linewidth = 0.6) +
+    ggplot2::geom_point(ggplot2::aes(shape = sig), size = point_size,
+                        stroke = 0.9, fill = "white") +
+    ggplot2::facet_wrap(~ clade, ncol = ncol, scales = "free_x") +
+    ggplot2::scale_color_manual(values = c("turquoise","cornflowerblue","magenta","darkblue","tomato","gold"),
+                                name = "Selected predictor") +
+    ggplot2::scale_shape_manual(name = "Significance",
+                                values = c(`FALSE` = 21, `TRUE` = 16),
+                                labels = c(`FALSE` = lab_f, `TRUE` = lab_t),
+                                drop = FALSE) +
+    ggplot2::labs(
+      x = xlab, y = NULL,
+      title = "Selected climate predictor association, by clade",
+      subtitle = paste("ARIMAX xreg at best-AICc order; one row per state.",
+                       "Exploratory \u2014 prevalence among sampled sequences.")) +
+    ggplot2::theme_minimal(base_size = base_size) +
+    ggplot2::theme(panel.grid.major.y = ggplot2::element_blank(),
+                   legend.position  = "bottom",
+                   axis.text  = ggplot2::element_text(size = base_size + 2),
+                   axis.title = ggplot2::element_text(size = base_size + 3),
+                   strip.text = ggplot2::element_text(size = base_size + 2)) +
+    ggplot2::guides(color = ggplot2::guide_legend(override.aes = list(shape = 16)))
+  if (has_or) p <- p + ggplot2::scale_x_log10()
+  p
 }
 
 

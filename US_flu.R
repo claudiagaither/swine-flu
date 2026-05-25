@@ -45,6 +45,7 @@ conflict_prefer("filter", "dplyr")
 conflict_prefer("count",  "dplyr")
 conflict_prefer("summarise", "dplyr")
 conflicts_prefer(base::as.data.frame)
+conflicts_prefer(base::unique)
 
 
 ## import & clean metadata
@@ -331,7 +332,7 @@ remove(doc, taxa_nodes, tree_clade, chain_length, log_every, out_dir, save_every
        hog_survey_03, mcc_tree, tip_dates, tree_phylo)
 
 
-## part four:   (S)ARIMA? ----
+## part four:   ARIMA(X)? ----
 
 ## create time-series prevalence data for each clade within each state
 ## add a year-month column for grouping
@@ -388,68 +389,6 @@ clim_long <- clim %>% pivot_longer(all_of(clim_vars), names_to = "variable", val
 clim_long <- clim_long %>% filter(date < "2024-12-31")
 clim_long <- clim_long %>% filter(date > "2014-01-01")
 
-# PLOT 1 — Annual means: the clearest view for spotting a removable trend
-# one faint line per state, one pooled linear trend (red) per variable: slope/sign = the trend
-#clim_annual <- clim_long %>% group_by(STATE_NAME, variable, year) %>%
-#  summarise(value = mean(value, na.rm = TRUE), .groups = "drop")
-
-# scale shift counts to sit in the background of each free-y facet
-#p1 <- ggplot(clim_annual, aes(year, value)) +
-#             aes(xintercept = year), color = "pink3", linewidth = 0.4) +
-#  geom_line(aes(group = STATE_NAME), alpha = 0.70, color = "skyblue3") +
-#  geom_smooth(aes(group = 1), method = "lm", formula = y ~ x,
-#              se = TRUE, color = "tomato", linewidth = 0.9) +
-#  facet_wrap(~ variable, scales = "free_y", ncol = 2) +
-#  labs(title = "Annual-mean climate by state, 2014–2024",
-#       subtitle = "Red = pooled linear trend,
-#       x = NULL, y = NULL) + theme_minimal(base_size = 11)
-
-# PLOT 2 — Deseasonalized monthly anomalies: confirms trend after removing
-#          the annual cycle (anomaly = value − state-specific monthly mean)
-#clim_anom <- clim_long %>% group_by(STATE_NAME, variable, month) %>%
-#  mutate(anomaly = value - mean(value, na.rm = TRUE)) %>% ungroup()
-
-#p2 <- ggplot(clim_anom, aes(date, anomaly)) +
-#  geom_hline(yintercept = 0, color = "pink4", linewidth = 0.3) +
-#  geom_line(aes(group = STATE_NAME), alpha = 0.10, color = "skyblue3") +
-#  geom_smooth(aes(group = 1), method = "loess", span = 0.3,
-#              se = FALSE, color = "tomato", linewidth = 0.9) +
-#  facet_wrap(~ variable, scales = "free_y", ncol = 2) +
-#  labs(title = "Deseasonalized monthly anomalies, 2014–2024",
-#       subtitle = "Red loess on anomalies: a sloping line = residual trend to remove",
-#       x = NULL, y = "Anomaly (value − monthly climatology)") + theme_minimal(base_size = 11)
-
-# PLOT 3 — Single-state detail 
-#plot_one_state <- function(state_name) {
-#  d  <- filter(clim_long, STATE_NAME == state_name)
-#  ggplot(d, aes(date, value)) +
-#    geom_line(color = "skyblue3", linewidth = 0.3) +
-#    geom_smooth(method = "lm", formula = y ~ x, se = FALSE,
-#                color = "tomato", linewidth = 0.7) +
-#    facet_wrap(~ variable, scales = "free_y", ncol = 2) +
-#    labs(title = paste0(state_name, ": monthly climate vs. major clade shifts"),
-#    subtitle = "Red = linear trend", x = NULL, y = NULL) + theme_minimal(base_size = 11)
-#}
-
-# QUANTITATIVE BACKUP — slope, significance, and (optional) Mann-Kendall
-#   per variable on the pooled annual means. Use this to decide objectively
-#   which variables actually need detrending vs. which are flat.
-
-#trend_summary <- clim_annual %>% group_by(variable) %>%
-#  group_modify(~{
-#    fit <- lm(value ~ year, data = .x)
-#    tibble(slope_per_year = coef(fit)[["year"]],
-#           p_value        = summary(fit)$coefficients["year", "Pr(>|t|)"],
-#           total_change   = coef(fit)[["year"]] * (max(.x$year) - min(.x$year))
-#      # , mk_p = trend::mk.test(
-#      #     .x %>% group_by(year) %>% summarise(v = mean(value)) %>% pull(v))$p.value
-#    )}) %>% ungroup() %>% arrange(p_value)
-
-#print(p1)
-#print(p2)
-#print(plot_one_state("North Carolina"))
-#print(plot_one_state("Iowa"))
-#print(trend_summary)
 ## based on the trend summary, the slope for max temp and avg temp have p values under 0.05
 ## min temp has a p-value of 0.0544, but others are all over 0.10
 
@@ -459,7 +398,7 @@ clim_long <- clim_long %>% filter(date > "2014-01-01")
 # d and D are constant across every model, the AICc / ΔAICc column in the final
 # output is fully comparable -- no cross-d apples-to-oranges problem.
 
-#ds <- as.Date("2014-01-01"); de <- as.Date("2024-12-01")
+ds <- as.Date("2014-01-01"); de <- as.Date("2024-12-01")
 #run_2010 <- run_clade_arimax(state_prev, climate_state_wt, "Iowa", "2010.1like", ds, de)
 
 #run_2010$predictor_results      # which climate var best explains the clade
@@ -470,12 +409,34 @@ clim_long <- clim_long %>% filter(date > "2014-01-01")
 
 
 ## expand to multiple states and clades
-combos <- expand_grid(state = c("Iowa","Nebraska","Missouri","North Carolina"),
+combos <- expand_grid(state = c("Iowa","Illinois","Indiana","Ohio","Pennsylvania","North Carolina",
+                      "Michigan","Minnesota","South Dakota","Nebraska",
+                      "Texas","Oklahoma","Missouri","Kansas"),
                       clade = c("2010.1like","1990.4.a"))
 runs <- pmap(combos, ~ run_clade_arimax(state_prev, climate_state_wt, ..1, ..2, ds, de))
 all_predictor_aic <- map_dfr(runs, "predictor_results")   # stacked, has state+clade cols
 
-## summarize top predictors for both clades within each state?
+predictor_summary <- build_predictor_summary(runs, adjust = TRUE)
+#predictor_table <- render_significance_table(predictor_summary)
+#write.csv(predictor_summary, "C:/Users/cgait/OneDrive/Desktop/summary_predictor.csv")
+#summary_stability <- stability_summary(runs)
+#write.csv(summary_stability, "C:/Users/cgait/OneDrive/Desktop/summary_stability.csv")
+
+## based on the predictor summary for first four states (Iowa, Missouri, Nebraska, North Carolina)
+## we see the onnly significant predictors in Missouri, but stable across parameterizations
+## for minimum temp (derivative) and precpitation... n = 75 obs so not the largest even
+
+# geographic: Midwest swine belt grouped, North Carolina (Southeast) last
+#forest_predictor(predictor_summary, state_levels = c("South Dakota","Minnesota","Michigan",
+#                                  "Nebraska","Iowa","Illinois","Indiana","Ohio","Pennsylvania",
+#                                  "Kansas","Oklahoma","Missouri","Texas","North Carolina"))
+
+
+# or order by sample size so the best-powered states sit on top
+# state_levels = predictor_summary %>%
+#   group_by(state) %>% summarise(n = max(n_obs)) %>%
+#   arrange(desc(n)) %>% pull(state)            # OR forest, one panel per clade
+# ggsave("predictor_forest.png", width = 9, height = 5, dpi = 300, bg = "white")
 
 
 ## part five:   maps ----
