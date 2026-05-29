@@ -19,7 +19,7 @@ build_clade_xml <- function(clade_name, clade_tips, tip_meta_df,
                        clade_tips %in% names(seq_seqs)]
   
   ## look up state for each tip
-  tip_states <- tip_meta_df$state[match(keep, tip_meta_df$sequence_name)]
+  tip_states <- tip_meta_df$state[base::match(keep, tip_meta_df$sequence_name)]
   tip_lat    <- loc_lat[tip_states]
   tip_lon    <- loc_lon[tip_states]
   
@@ -783,17 +783,14 @@ check_clade_model <- function(run) {
 
 
 
-# ============================================================================
 # Part four (cont.): predictor significance for the selected ARIMAX models
-# ----------------------------------------------------------------------------
+
 # Consume the `run` objects from run_clade_arimax() and produce inference on
 # the SELECTED climate predictor. Analysis is exploratory: the outcome is clade
 # prevalence among publicly deposited sequences (convenience sample), so this
 # is association within sampled sequences, not population clade prevalence.
 # ARIMA coefficients use asymptotic (Wald) normal inference -> z-tests, not
 # t-tests. SE = sqrt(diag(var.coef)). Outcome is logit, so exp(coef) is an OR.
-# ============================================================================
-
 
 # refit_best_model(): refit the min-AICc order from the sweep with a NAMED
 # one-column xreg, so the climate coefficient carries the predictor's name
@@ -1072,24 +1069,24 @@ forest_predictor <- function(sig_tbl, ncol = NULL, point_size = 3.2,
 }
 
 
-## part four: maps ----
+## part five: maps ----
 
 make_diffusion_map <- function(tree_file,
                                subclade_name,
                                lat_col          = "location1",
                                lon_col          = "location2",
-                               pad              = 0.2,
-                               bw_mult_lon      = 1.1,
-                               bw_mult_lat      = 1.8,
+                               pad              = 4.0,
+                               bw_mult_lon      = 1.2,
+                               bw_mult_lat      = 1.5,
                                kde_n            = 400,
                                density_quantile = 0.50,
-                               map_xlim         = c(-125, -72),
+                               map_xlim         = c(-105, -72),
                                map_ylim         = c(24, 50),
                                states_data      = states,
                                centers_data     = state_centers,
                                save_path        = NULL,
-                               save_width       = 12,
-                               save_height      = 8,
+                               save_width       = 9,
+                               save_height      = 7,
                                save_dpi         = 300) {
   
   ## Read tree and pull node table
@@ -1133,11 +1130,13 @@ make_diffusion_map <- function(tree_file,
     geom_sf(data = centers_data,
             color = "pink4", fill = "gold", size = 3, shape = 22) +
     coord_sf(xlim = map_xlim, ylim = map_ylim, expand = FALSE) +
-    theme_classic(base_size = 12) +
+    theme_classic(base_size = 16) +
     theme(legend.position    = "right",
           legend.key.height  = unit(1.2, "cm"),
-          plot.title         = element_text(face = "bold", size = 14),
-          axis.line          = element_blank()) +
+          plot.title         = element_text(face = "bold", size = 18),
+          axis.line          = element_blank(),
+          axis.ticks         = element_blank(),
+          axis.text          = element_blank()) +
     labs(subtitle = sprintf("KDE of %s locations from subclade MCC tree",
                             subclade_name), x = "", y = "")
   

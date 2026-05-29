@@ -2,7 +2,7 @@
 ## phylogeography and ecological predictors of transmission!
 
 ## part one:    metadata ----
-
+set.seed(1738)
 source("C:/Users/cgait/OneDrive/Desktop/swine flu/US_flu_functions.R")
 library(ape)
 library(Biostrings)
@@ -84,21 +84,50 @@ survey_weights %>% dplyr::count(survey_year) %>% arrange(survey_year)
 
 
 ## swine center selection algorithm based on Census of Agriculture data
-## need lat and lon columns
-#locations <- data.frame(
-#  state = c("Iowa","Minnesota","Illinois","Indiana","Ohio","North Carolina",
-#            "Pennsylvania","Michigan","Wisconsin","Kentucky","Arkansas",
-#            "Oklahoma","Texas","Missouri","Kansas","Colorado","Wyoming",
-#            "Utah","Nebraska","South Dakota",
-## fewer than 10 sequences per state
-#            "Alabama","Arizona","California","Florida","Georgia",
-#            "Louisiana","Maryland","Montana","New Mexico","New York",
-#            "North Dakota","Oregon","South Carolina","Tennessee",
-#            "Virginia","West Virginia"))
+## Get county centroids for all US counties
+counties_sf <- tigris::counties(cb = TRUE, progress_bar = FALSE)
 
-## Build a named-vector lookup  state → c(lat, lon)
-#loc_lat <- setNames(locations$lat, locations$state)
-#loc_lon <- setNames(locations$lon, locations$state)
+## Extract lat/lon from county geometries
+county_coords <- counties_sf %>% st_centroid() %>% mutate(GEOID = GEOID,
+    county_lat = st_coordinates(.)[, "Y"],
+    county_lon = st_coordinates(.)[, "X"]) %>%
+  st_drop_geometry() %>% select(GEOID, county_lat, county_lon)
+
+## Average hog weights across all survey years (1998-2025) by county
+county_hog_avg <- survey_weights %>%
+  group_by(GEOID) %>% summarise(avg_hog_count = mean(head, na.rm = TRUE), 
+            .groups = "drop")
+
+## Join coordinates with hog weights
+county_data <- county_coords %>% inner_join(county_hog_avg, by = "GEOID")
+
+## Get state FIPS codes to match your GEOID format
+state_fips <- tigris::states(cb = TRUE) %>%
+  st_drop_geometry() %>% select(STATEFP, NAME) %>%
+  dplyr::rename(state = NAME) %>% mutate(state_fips = as.numeric(STATEFP))
+
+## need lat and lon columns
+## there are also sequences from Florida, Louisiana, Maryland, Utah & Wyoming
+## but no survey data apparently?
+locations <- data.frame(state = c("Iowa","Minnesota","Illinois","Indiana","Ohio","North Carolina",
+                        "Pennsylvania","Michigan","Wisconsin","Kentucky","Arkansas",
+                        "Oklahoma","Texas","Missouri","Kansas","Colorado","Nebraska","South Dakota",
+                        # fewer than 10 sequences per state
+                        "Alabama","Arizona","California","Georgia","Montana","New Mexico","New York",
+                        "North Dakota","Oregon","South Carolina","Tennessee","Virginia","West Virginia"))
+
+## Calculate weighted-average coordinates by state
+state_locations <- county_data %>% mutate(state_fips = as.numeric(substr(GEOID, 1, 2))) %>%
+  left_join(state_fips, by = "state_fips") %>% filter(state %in% locations$state) %>%  # filter to your states of interest
+  group_by(state) %>% summarise(
+    latitude = weighted.mean(county_lat, avg_hog_count, na.rm = TRUE),
+    longitude = weighted.mean(county_lon, avg_hog_count, na.rm = TRUE),
+    total_hogs = sum(avg_hog_count, na.rm = TRUE),
+    n_counties = n(), .groups = "drop") %>% arrange(state)
+
+## Convert to named vectors for lookup (as you were planning)
+loc_lat <- setNames(state_locations$latitude, state_locations$state)
+loc_lon <- setNames(state_locations$longitude, state_locations$state)
 
 
 ## part two:    MCC tree and tips ----
@@ -240,9 +269,13 @@ mcc_tree_pruned@phylo <- pruned_tree
 ## part three:  random-walk diffusion xmls ----
 
 ## template XML produced by BEAUTi (contains all 4589 taxa + sequences)
-#xml_path  <- "C:/Users/cgait/OneDrive/Desktop/1990_v2/1990_USflu_tree.xml"
+#xml_path  <- "C:/Users/cgait/OneDrive/Desktop/1990_v3/1990_USflu_tree.xml"
 #out_dir   <- "C:/Users/cgait/OneDrive/Desktop/clade_xmls"
 #dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+## need to filter full mcc template to remove states with < 30 sequences
+## then randomly sample the minimum number (should be 31) of sequences from each state
+## and THEN make the clade-specific xmls from this downsampled set of sequences
 
 ## MCMC settings (adjust as needed)
 #chain_length   <- 100000000   # 100 million
@@ -272,11 +305,10 @@ mcc_tree_pruned@phylo <- pruned_tree
 #names(seq_seqs) <- seq_ids
 #cat("Parsed", length(taxon_ids), "taxa and", length(seq_ids), "sequences from template.\n")
 
- 
  ## Check which states in tip_meta are still un-geocoded 
- #all_states_in_data <- unique(na.omit(tip_meta$state))
- #missing_states     <- setdiff(all_states_in_data, names(loc_lat))
- #if (length(missing_states) > 0) {
+#all_states_in_data <- unique(na.omit(tip_meta$state))
+#missing_states     <- base::setdiff(all_states_in_data, names(loc_lat))
+#if (length(missing_states) > 0) {
 #   warning("These states have no coordinates — their tips will be DROPPED ",
 #           "from clade XMLs:\n  ", paste(missing_states, collapse = ", "),
 #           "\n  → Add them to the locations data frame to include them.")
@@ -286,15 +318,44 @@ mcc_tree_pruned@phylo <- pruned_tree
 ## filter tip_meta to only samples with a clade assignment
 tip_meta_assigned <- tip_meta %>% filter(!clade %in% c("Missing", NA_character_))
 ## get unique clades
-#clades_to_run <- sort(unique(tip_meta_assigned$clade))
+clades_to_run <- sort(unique(tip_meta_assigned$clade))
 #cat("Clades to process:", paste(clades_to_run, collapse = ", "), "\n\n")
-## loop and write
+
+## Downsample sequences: each state contributes equal n of sequences 
+## Apply the SAME filters build_clade_xml uses internally so the per-state
+## minimum reflects sequences that will actually make it into an XML.
+#pool <- tip_meta_assigned %>% filter(sequence_name %in% names(taxon_dates),
+#         sequence_name %in% names(seq_seqs), !is.na(state), state %in% names(loc_lat))
+
+## Drop states with < 30 sequences across the whole (filtered) pool
+#min_state_n  <- 30
+#state_counts <- pool %>% dplyr::count(state, name = "n")
+#keep_states     <- state_counts$state[state_counts$n >= min_state_n]
+#dropped_states  <- state_counts$state[state_counts$n <  min_state_n]
+#cat("State counts in pool (sorted):\n"); print(state_counts %>% arrange(n))
+#cat("\nDropping", length(dropped_states), "states with <", min_state_n,
+#    "seqs:\n  ", paste(dropped_states, collapse = ", "), "\n")
+#pool <- pool %>% filter(state %in% keep_states)
+
+## Take the minimum surviving state count -> per-state sample size
+#n_per_state <- min(state_counts$n[state_counts$state %in% keep_states])
+#cat("\nDownsampling each kept state to n =", n_per_state, "sequences.\n")
+
+## Random sample, equal n from every kept state
+#downsampled <- pool %>% group_by(state) %>% slice_sample(n = n_per_state) %>% ungroup()
+#allowed_tips <- downsampled$sequence_name
+#cat("Total seqs after downsampling:", length(allowed_tips),
+#    "(", length(keep_states), "states x", n_per_state, "per state)\n\n")
+## sanity check
+#downsampled_clades <- downsampled %>% dplyr::count(clade, state) # per-clade breakdown
+
+## loop and write xmls
 #summary_rows <- list()
 #for (cl in clades_to_run) {
-#   tips_in_clade <- tip_meta_assigned %>%
-#     filter(clade == cl) %>%
-#     pull(sequence_name)
-#   cat("── Clade:", cl, " (", length(tips_in_clade), " tips) ──\n")
+#  tips_in_clade <- tip_meta_assigned %>%
+#    filter(clade == cl, sequence_name %in% allowed_tips) %>%
+#    pull(sequence_name)
+#  cat("── Clade:", cl, " (", length(tips_in_clade), " tips) ──\n")
 #   
 #   result <- build_clade_xml(
 #     clade_name   = cl,
@@ -326,10 +387,12 @@ tip_meta_assigned <- tip_meta %>% filter(!clade %in% c("Missing", NA_character_)
 ## summary table
 #clade_summary <- bind_rows(summary_rows)
 #write.csv(clade_summary, file.path(out_dir, "clade_xml_summary.csv"), row.names = FALSE)
+#write.csv(downsampled %>% select(sequence_name, state, clade, date),
+#          file.path(out_dir, "downsampled_taxa.csv"), row.names = FALSE)
 
 remove(doc, taxa_nodes, tree_clade, chain_length, log_every, out_dir, save_every, xml_path, tree_clade_pruned, 
        missing_clades, missing_in_tree, extra_states, cl, result, rain, avg_temp, hog_survey_01, hog_survey_02,
-       hog_survey_03, mcc_tree, tip_dates, tree_phylo)
+       hog_survey_03, mcc_tree, tip_dates, tree_phylo, hog_census)
 
 
 ## part four:   ARIMA(X)? ----
@@ -413,10 +476,10 @@ combos <- expand_grid(state = c("Iowa","Illinois","Indiana","Ohio","Pennsylvania
                       "Michigan","Minnesota","South Dakota","Nebraska",
                       "Texas","Oklahoma","Missouri","Kansas"),
                       clade = c("2010.1like","1990.4.a"))
-runs <- pmap(combos, ~ run_clade_arimax(state_prev, climate_state_wt, ..1, ..2, ds, de))
-all_predictor_aic <- map_dfr(runs, "predictor_results")   # stacked, has state+clade cols
+#runs <- pmap(combos, ~ run_clade_arimax(state_prev, climate_state_wt, ..1, ..2, ds, de))
+#all_predictor_aic <- map_dfr(runs, "predictor_results")   # stacked, has state+clade cols
 
-predictor_summary <- build_predictor_summary(runs, adjust = TRUE)
+#predictor_summary <- build_predictor_summary(runs, adjust = TRUE)
 #predictor_table <- render_significance_table(predictor_summary)
 #write.csv(predictor_summary, "C:/Users/cgait/OneDrive/Desktop/summary_predictor.csv")
 #summary_stability <- stability_summary(runs)
@@ -453,31 +516,28 @@ states$state <- states$NAME
 states <- left_join(states, state_counts_full, by="state")
 states$log_n <- log(states$n_sequences)
 remove(all_states, state_counts, state_counts_full)
-states <- states %>% filter(state != "Alaska")
-states <- states %>% filter(state != "Hawaii")
 
 ## filter states for inclusion
-#states <- states %>% filter(!is.na(n_sequences))
-states <- states %>% filter(n_sequences>=10)
+states <- states %>% filter(NAME %in% state_locations$state)
+states <- states %>% filter(n_sequences>30)
+state_locations <- state_locations %>% filter(state %in% states$NAME)
 
 ## swine centers for each state
-## pulled just looking at the ESRI map lol will do more formally later
-state_centers <- st_as_sf(locations, coords = c("lon", "lat"), crs = 4326)
+state_centers <- st_as_sf(state_locations, coords = c("longitude", "latitude"), crs = 4326)
 
-US_samples <- ggplot() + geom_sf(data = states, aes(fill = n_sequences)) +
-              geom_sf(data = state_centers, color="pink4", fill="gold", size=3, shape=22) +
-              scale_fill_scico(palette = "hawaii", direction = -1) +
-              theme_classic() 
+#US_samples <- ggplot() + geom_sf(data = states, aes(fill = n_sequences)) +
+#              geom_sf(data = state_centers, color="pink4", fill="gold", size=3, shape=22) +
+#              scale_fill_scico(palette = "hawaii", direction = -1) +
+#              theme_classic() 
 #US_samples
 
 
 ## KDE for node density surfaces within subclades??
-#tree_files <- list(
-#  "1990.4.a"   = "C:/Users/cgait/OneDrive/Desktop/BEAST runs/1990_1990.4.a_v2/mcc_1990.4.a_v2.trees",
-#  "2010.1like" = "C:/Users/cgait/OneDrive/Desktop/BEAST runs/1990_2010.1like_v2/mcc_1990_2010.1like.trees",
-#  "2010.2"     = "C:/Users/cgait/OneDrive/Desktop/2010.2_v1/2010.2_v1.trees",
-#  "1990.4.b"   = "C:/Users/cgait/OneDrive/Desktop/1990.4b_v1/1990.4.b1b2_v1.trees")
-
+tree_files <- list(
+  "1990.4.a"   = "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/1990.4.a/mcc_1990.4.a_downsampled.trees",
+  "1990.4.b"   = "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/1990.4.b1b2/mcc_1990.4.b1b2_downsampled.trees",
+  "2010.1" = "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/2010.1like/mcc_2010.1like_downsampled.trees",
+  "2010.2"     = "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/2010.2/mcc_2010.2_downsampled.trees")
 
 ## Returns a named list of ggplot objects, and writes a PNG for each.
 #diffusion_maps <- mapply(
@@ -491,11 +551,4 @@ US_samples <- ggplot() + geom_sf(data = states, aes(fill = n_sequences)) +
 #  name = names(tree_files),
 #  SIMPLIFY = FALSE)
 
-## Access individually:
-#diffusion_maps[["1990.4.a"]]
-#diffusion_maps[["2010.1like"]]
-#make_diffusion_map(tree_files[["2010.2"]], "2010.2", 
-#                   bw_mult_lon = 1.0, bw_mult_lat = 3.0)
-#diffusion_maps[["1990.4.b"]]
 
-#ggsave("2010.1like_surface.png", plot=diffusion_2010.1like, width=12, height=8, dpi=300, bg="white")
