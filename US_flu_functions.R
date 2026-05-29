@@ -1150,3 +1150,103 @@ make_diffusion_map <- function(tree_file,
   return(p)
 }
 
+
+get_kde_df <- function(tree_file,
+                       lat_col          = "location1",
+                       lon_col          = "location2",
+                       pad              = 4.0,
+                       bw_mult_lon      = 1.2,
+                       bw_mult_lat      = 1.5,
+                       kde_n            = 400,
+                       density_quantile = 0.50) {
+  
+  mcc_tree  <- read.beast(tree_file)
+  node_data <- as_tibble(mcc_tree)
+  
+  coords <- node_data %>%
+    filter(!is.na(.data[[lat_col]]), !is.na(.data[[lon_col]])) %>%
+    mutate(lat = as.numeric(.data[[lat_col]]),
+           lon = as.numeric(.data[[lon_col]])) %>%
+    dplyr::select(node, label, lat, lon, height)
+  
+  lon_range <- c(min(coords$lon) - pad, max(coords$lon) + pad)
+  lat_range <- c(min(coords$lat) - pad, max(coords$lat) + pad)
+  
+  kde <- MASS::kde2d(
+    x    = coords$lon,
+    y    = coords$lat,
+    n    = kde_n,
+    lims = c(lon_range, lat_range),
+    h    = c(MASS::bandwidth.nrd(coords$lon) * bw_mult_lon,
+             MASS::bandwidth.nrd(coords$lat) * bw_mult_lat)
+  )
+  
+  expand.grid(lon = kde$x, lat = kde$y) %>%
+    mutate(density = as.vector(kde$z)) %>%
+    filter(density > quantile(density, density_quantile))
+}
+
+
+make_overlap_map <- function(tree_file_a, tree_file_b,
+                             name_a, name_b,
+                             color_a          = "Blues",   # RColorBrewer name or scico palette
+                             color_b          = "Reds",
+                             density_quantile = 0.50,
+                             alpha_range      = c(0.15, 0.80),
+                             map_xlim         = c(-105, -72),
+                             map_ylim         = c(24, 50),
+                             states_data      = states,
+                             centers_data     = state_centers,
+                             save_path        = NULL,
+                             save_width       = 9,
+                             save_height      = 7,
+                             save_dpi         = 300) {
+  
+  kde_a <- get_kde_df(tree_file_a, density_quantile = density_quantile) %>%
+    mutate(clade = name_a)
+  kde_b <- get_kde_df(tree_file_b, density_quantile = density_quantile) %>%
+    mutate(clade = name_b)
+  
+  ## Normalize densities within each clade to [0,1] so color scales are comparable
+  kde_a <- kde_a %>% mutate(dens_norm = (density - min(density)) / diff(range(density)))
+  kde_b <- kde_b %>% mutate(dens_norm = (density - min(density)) / diff(range(density)))
+  
+  p <- ggplot() +
+    geom_sf(data = states_data,
+            fill = "#f0ede8", color = "#d0ccc8", linewidth = 0.3) +
+    
+    ## Clade A layer
+    geom_tile(data = kde_a,
+              aes(x = lon, y = lat, fill = dens_norm, alpha = dens_norm)) +
+    scale_fill_distiller(palette = color_a, direction = 1,
+                         name = name_a, guide = guide_colorbar(order = 1)) +
+    scale_alpha_continuous(range = alpha_range, guide = "none") +
+    
+    ## Clade B layer — uses ggnewscale to register a second fill scale
+    ggnewscale::new_scale_fill() +
+    geom_tile(data = kde_b,
+              aes(x = lon, y = lat, fill = dens_norm, alpha = dens_norm)) +
+    scale_fill_distiller(palette = color_b, direction = 1,
+                         name = name_b, guide = guide_colorbar(order = 2)) +
+    
+    geom_sf(data = centers_data,
+            color = "pink4", fill = "gold", size = 3, shape = 22) +
+    coord_sf(xlim = map_xlim, ylim = map_ylim, expand = FALSE) +
+    theme_classic(base_size = 16) +
+    theme(legend.position   = "right",
+          legend.key.height = unit(1.2, "cm"),
+          axis.line  = element_blank(),
+          axis.ticks = element_blank(),
+          axis.text  = element_blank()) +
+    labs(title    = paste(name_a, "vs", name_b, "— overlapping KDE"),
+         subtitle = "Node location density from subclade MCC trees",
+         x = "", y = "")
+  
+  if (!is.null(save_path))
+    ggsave(save_path, plot = p,
+           width = save_width, height = save_height,
+           dpi = save_dpi, bg = "white")
+  
+  return(p)
+}
+

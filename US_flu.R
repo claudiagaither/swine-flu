@@ -12,6 +12,7 @@ library(data.table)
 library(dplyr)
 library(exactextractr)
 library(forecast) 
+library(ggnewscale)
 library(ggplot2)
 library(ggtree)
 library(gt)
@@ -525,19 +526,13 @@ state_locations <- state_locations %>% filter(state %in% states$NAME)
 ## swine centers for each state
 state_centers <- st_as_sf(state_locations, coords = c("longitude", "latitude"), crs = 4326)
 
-#US_samples <- ggplot() + geom_sf(data = states, aes(fill = n_sequences)) +
-#              geom_sf(data = state_centers, color="pink4", fill="gold", size=3, shape=22) +
-#              scale_fill_scico(palette = "hawaii", direction = -1) +
-#              theme_classic() 
-#US_samples
-
-
-## KDE for node density surfaces within subclades??
+## KDE for node density surfaces within subclades
 tree_files <- list(
   "1990.4.a"   = "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/1990.4.a/mcc_1990.4.a_downsampled.trees",
   "1990.4.b"   = "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/1990.4.b1b2/mcc_1990.4.b1b2_downsampled.trees",
   "2010.1" = "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/2010.1like/mcc_2010.1like_downsampled.trees",
   "2010.2"     = "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/2010.2/mcc_2010.2_downsampled.trees")
+
 
 ## Returns a named list of ggplot objects, and writes a PNG for each.
 #diffusion_maps <- mapply(
@@ -551,4 +546,27 @@ tree_files <- list(
 #  name = names(tree_files),
 #  SIMPLIFY = FALSE)
 
+
+## overlapping lineage maps!
+## 1990.4.a (blue) vs 1990.4.b (red)
+map_1990 <- make_overlap_map(
+  tree_file_a = tree_files[["1990.4.a"]],
+  tree_file_b = tree_files[["1990.4.b"]],
+  name_a      = "1990.4.a",
+  name_b      = "1990.4.b",
+  color_a     = "Greens",
+  color_b     = "Reds",
+  save_path   = "overlap_1990a_1990b.png")
+#map_1990
+
+## 2010.1 (purple) vs 2010.2 (orange)
+map_2010 <- make_overlap_map(
+  tree_file_a = tree_files[["2010.1"]],
+  tree_file_b = tree_files[["2010.2"]],
+  name_a      = "2010.1",
+  name_b      = "2010.2",
+  color_a     = "Purples",
+  color_b     = "Oranges",
+  save_path   = "overlap_2010.1_2010.2.png")
+#map_2010
 
