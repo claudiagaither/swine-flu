@@ -12,6 +12,7 @@ library(data.table)
 library(dplyr)
 library(exactextractr)
 library(forecast) 
+library(gee)
 library(ggnewscale)
 library(ggplot2)
 library(ggtree)
@@ -133,17 +134,14 @@ loc_lon <- setNames(state_locations$longitude, state_locations$state)
 
 ## part two:    MCC tree and tips ----
 
-## clade assignments made separately using BV-BRC
-tip_clades <- read.csv("C:/Users/cgait/OneDrive/Desktop/BEAST runs/1990 US flu/1990_v1/clade_assignment_updated.csv")
 ## combined maximum clade credibility (MCC) tree from TreeAnnotator
-mcc_tree <- read.beast("C:/Users/cgait/OneDrive/Desktop/BEAST runs/1990 US flu/1990_v1/mcc_1990_v1_150k.trees")
+mcc_tree <- read.beast("C:/Users/cgait/OneDrive/Desktop/swine flu/sequence data/mcc_1990_v3.trees")
 options(ignore.negative.edge = TRUE)
 
-## tip/taxa metadata
-tip_dates <- read.table("C:/Users/cgait/OneDrive/Desktop/BEAST runs/1990 US flu/1990_v1/aligned_HA_1990_dates.txt",
+## tip/taxa metadata (dates, states & BV_BRC clade assignments)
+tip_meta <- read.table("C:/Users/cgait/OneDrive/Desktop/swine flu/sequence data/H3_1990-2026_metadata_final.tsv",
                         header = TRUE, sep = "\t")
-tip_dates$date <- as.Date(tip_dates$date)
-tip_meta <- tip_dates
+tip_meta$date <- as.Date(tip_meta$date)
 
 # Extract state name from label column (text between 2nd and 3rd "/")
 tip_meta$state <- sapply(strsplit(tip_meta$sequence_name, "/"), function(x) x[3])
@@ -196,10 +194,6 @@ tip_meta <- tip_meta %>% mutate(region = case_when(
 
 # Create complete metadata for all tree tips
 all_tree_tips <- data.frame(sequence_name = mcc_tree@phylo$tip.label)
-# Merge with your existing tip_meta (keeping all tree tips)
-tip_meta <- merge(all_tree_tips, tip_meta, by = "sequence_name", all.x = TRUE)
-# Then merge with clade assignments
-tip_meta <- merge(tip_meta, tip_clades, by = "sequence_name", all.x = TRUE)
 
 #clean clade assignments
 tip_meta <- tip_meta %>% mutate(clade = case_when(
@@ -221,7 +215,7 @@ tip_meta <- tip_meta %>% mutate(clade = case_when(
                                 clade == "2010.1" ~ "2010.1like",
                                 is.na(clade) ~ "Missing",
                                 TRUE ~ clade))
-#table(tip_meta_clades$clade, useNA="always")
+#table(tip_meta$clade, useNA="always")
 
 ## once ESS values (excluding coalescent, join & prior if necessary, but ideally all values) are above 200, 
 ## export and combine .trees files using LogCombiner, then put combined tree into TreeAnnotator for the MCC tree
@@ -230,18 +224,18 @@ tip_meta <- tip_meta %>% mutate(clade = case_when(
 tree_phylo <- mcc_tree@phylo
 
 #color tips by clade assignments made using BV-BRC
-tree_clade <- ggtree(mcc_tree) %<+% tip_meta +
-  geom_tippoint(aes(color = clade), alpha=0.5, size = 3) +
-  scale_color_paletteer_d("ggsci::default_ucscgb") + 
-  theme_tree2() + coord_cartesian(xlim = c(1990, 2033)) +
-  theme(legend.position = "right", legend.text = element_text(size = 12),
-        legend.key.size = unit(0.8, "cm")) + guides(color = guide_legend(ncol = 1))
+#tree_clade <- ggtree(mcc_tree) %<+% tip_meta +
+#  geom_tippoint(aes(color = clade), alpha=0.5, size = 3) +
+#  scale_color_paletteer_d("ggsci::default_ucscgb") + 
+#  theme_tree2() + coord_cartesian(xlim = c(1990, 2033)) +
+#  theme(legend.position = "right", legend.text = element_text(size = 12),
+#        legend.key.size = unit(0.8, "cm")) + guides(color = guide_legend(ncol = 1))
 #tree_clade
 
 # See how many sequences match between tree and clade assignments
 tree_tips <- mcc_tree@phylo$tip.label
-clade_names <- tip_clades$sequence_name
-#length(intersect(tree_tips, clade_names))
+clade_names <- tip_meta$sequence_name
+length(base::intersect(tree_tips, clade_names))
 
 # See which clade assignments are missing (not matching tree tips)
 missing_in_tree <- base::setdiff(clade_names, tree_tips)
@@ -249,28 +243,40 @@ missing_in_tree <- base::setdiff(clade_names, tree_tips)
 # See which tree tips don't have clade assignments
 missing_clades <- base::setdiff(tree_tips, clade_names)
 
-## prune missing_clades tips from tree and re-plot?
-pruned_tree <- treeio::drop.tip(mcc_tree@phylo, missing_clades)
+norm_key <- function(x) {
+  x <- gsub("_dup[0-9]+$", "", x)   # drop dedup suffixes
+  x <- gsub(",", "", x)             # drop commas the tree software removed
+  x <- gsub("\\s+", " ", x)         # collapse whitespace
+  trimws(x)
+}
 
-# If mcc_tree is a treedata object, update it
-mcc_tree_pruned <- mcc_tree
-mcc_tree_pruned@phylo <- pruned_tree
+lookup <- tip_meta %>% mutate(key = norm_key(sequence_name)) %>% distinct(key, .keep_all = TRUE) %>%      # handles the 17 dup rows
+  select(key, clade)
+
+tree_df <- data.frame(tip = tree_tips, key = norm_key(tree_tips)) %>% left_join(lookup, by = "key")
+#sum(is.na(tree_df$clade))     # residual unmatched tips, n=50
+
+missing_clades <- tree_df$tip[is.na(tree_df$clade)]
+#length(missing_clades) 
+
+## prune missing_clades tips from tree and re-plot?
+mcc_tree_pruned <- treeio::drop.tip(mcc_tree, missing_clades)
+
+# sanity check: should drop by exactly 50
+#ape::Ntip(mcc_tree@phylo)            # 4589
+#ape::Ntip(mcc_tree_pruned@phylo)     # 4539
 
 # Re-plot with pruned tree
-#tree_clade_pruned <- ggtree(mcc_tree_pruned) %<+% tip_meta +
-#  geom_tippoint(aes(color = clade), alpha = 0.5, size = 3) +
-#  scale_color_paletteer_d("ggsci::default_ucscgb") +
-#  theme_tree2() + coord_cartesian(xlim = c(120, 175)) +
-#  theme(legend.position = "right", legend.text = element_text(size = 12),
-#  legend.key.size = unit(0.8, "cm")) + guides(color = guide_legend(ncol = 1))
-#tree_clade_pruned
-#ggsave("C:/Users/cgait/OneDrive/Desktop/clades_pruned.jpeg",width=20,height=25,units=c("cm"),tree_clade_pruned)
+clade_df <- tree_df[, c("tip", "clade")]
+#clades_pruned <- ggtree(mcc_tree_pruned) %<+% clade_df + geom_tippoint(aes(color = clade))
+#clades_pruned
+#ggsave("C:/Users/cgait/OneDrive/Desktop/clades_pruned.jpeg",width=20,height=25,units=c("cm"), clades_pruned)
 
 
 ## part three:  random-walk diffusion xmls ----
 
 ## template XML produced by BEAUTi (contains all 4589 taxa + sequences)
-#xml_path  <- "C:/Users/cgait/OneDrive/Desktop/1990_v3/1990_USflu_tree.xml"
+#xml_path  <- "C:/Users/cgait/OneDrive/Desktop/BEAST runs/1990_v3/1990_USflu_tree.xml"
 #out_dir   <- "C:/Users/cgait/OneDrive/Desktop/clade_xmls"
 #dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
@@ -306,20 +312,22 @@ mcc_tree_pruned@phylo <- pruned_tree
 #names(seq_seqs) <- seq_ids
 #cat("Parsed", length(taxon_ids), "taxa and", length(seq_ids), "sequences from template.\n")
 
- ## Check which states in tip_meta are still un-geocoded 
+## Check which states in tip_meta are still un-geocoded 
 #all_states_in_data <- unique(na.omit(tip_meta$state))
 #missing_states     <- base::setdiff(all_states_in_data, names(loc_lat))
 #if (length(missing_states) > 0) {
 #   warning("These states have no coordinates — their tips will be DROPPED ",
-#           "from clade XMLs:\n  ", paste(missing_states, collapse = ", "),
+#         "from clade XMLs:\n  ", paste(missing_states, collapse = ", "),
 #           "\n  → Add them to the locations data frame to include them.")
 # }
  
 ## Generate one XML per clade
 ## filter tip_meta to only samples with a clade assignment
-tip_meta_assigned <- tip_meta %>% filter(!clade %in% c("Missing", NA_character_))
+tip_meta_assigned <- tip_meta %>% filter(!clade %in% c("unassigned", NA_character_))
+tip_meta_assigned <- tip_meta_assigned %>% distinct(sequence_name, .keep_all = TRUE)
+
 ## get unique clades
-clades_to_run <- sort(unique(tip_meta_assigned$clade))
+#clades_to_run <- sort(unique(tip_meta_assigned$clade))
 #cat("Clades to process:", paste(clades_to_run, collapse = ", "), "\n\n")
 
 ## Downsample sequences: each state contributes equal n of sequences 
@@ -327,7 +335,6 @@ clades_to_run <- sort(unique(tip_meta_assigned$clade))
 ## minimum reflects sequences that will actually make it into an XML.
 #pool <- tip_meta_assigned %>% filter(sequence_name %in% names(taxon_dates),
 #         sequence_name %in% names(seq_seqs), !is.na(state), state %in% names(loc_lat))
-
 ## Drop states with < 30 sequences across the whole (filtered) pool
 #min_state_n  <- 30
 #state_counts <- pool %>% dplyr::count(state, name = "n")
@@ -335,13 +342,11 @@ clades_to_run <- sort(unique(tip_meta_assigned$clade))
 #dropped_states  <- state_counts$state[state_counts$n <  min_state_n]
 #cat("State counts in pool (sorted):\n"); print(state_counts %>% arrange(n))
 #cat("\nDropping", length(dropped_states), "states with <", min_state_n,
-#    "seqs:\n  ", paste(dropped_states, collapse = ", "), "\n")
+#   "seqs:\n  ", paste(dropped_states, collapse = ", "), "\n")
 #pool <- pool %>% filter(state %in% keep_states)
-
-## Take the minimum surviving state count -> per-state sample size
+### Take the minimum surviving state count -> per-state sample size
 #n_per_state <- min(state_counts$n[state_counts$state %in% keep_states])
 #cat("\nDownsampling each kept state to n =", n_per_state, "sequences.\n")
-
 ## Random sample, equal n from every kept state
 #downsampled <- pool %>% group_by(state) %>% slice_sample(n = n_per_state) %>% ungroup()
 #allowed_tips <- downsampled$sequence_name
@@ -391,7 +396,7 @@ clades_to_run <- sort(unique(tip_meta_assigned$clade))
 #write.csv(downsampled %>% select(sequence_name, state, clade, date),
 #          file.path(out_dir, "downsampled_taxa.csv"), row.names = FALSE)
 
-remove(doc, taxa_nodes, tree_clade, chain_length, log_every, out_dir, save_every, xml_path, tree_clade_pruned, 
+remove(doc, taxa_nodes, chain_length, log_every, out_dir, save_every, xml_path, 
        missing_clades, missing_in_tree, extra_states, cl, result, rain, avg_temp, hog_survey_01, hog_survey_02,
        hog_survey_03, mcc_tree, tip_dates, tree_phylo, hog_census)
 
@@ -401,6 +406,11 @@ remove(doc, taxa_nodes, tree_clade, chain_length, log_every, out_dir, save_every
 ## create time-series prevalence data for each clade within each state
 ## add a year-month column for grouping
 tip_meta_assigned <- tip_meta_assigned %>% mutate(year_month = floor_date(as.Date(date), "month"))
+tip_meta_assigned$year <- as.integer(format(tip_meta_assigned$year_month, "%Y"))
+tip_meta_assigned <- tip_meta_assigned %>% filter(year > 1990)
+tip_meta_assigned <- tip_meta_assigned %>% filter(year >= 2003)
+#hist(tip_meta_assigned$year)
+#table(tip_meta_assigned$state)
 
 ## overall monthly clade prevalence 
 overall_prev <- tip_meta_assigned %>% group_by(year_month, clade) %>% 
@@ -450,8 +460,8 @@ clim_vars <- c("tmax", "tmin", "tavg", "ppt", "vap", "ws", "abs_humidity")
 clim <- climate_state_wt %>% mutate(date = as.Date(sprintf("%d-%02d-01", year, month)))
 clim_long <- clim %>% pivot_longer(all_of(clim_vars), names_to = "variable", values_to = "value") %>%
   mutate(variable = factor(variable, levels = clim_vars))  # keeps facet order
-clim_long <- clim_long %>% filter(date < "2024-12-31")
-clim_long <- clim_long %>% filter(date > "2014-01-01")
+clim_long <- clim_long %>% filter(date <= "2024-12-31")
+clim_long <- clim_long %>% filter(date >= "2012-01-01")
 
 ## based on the trend summary, the slope for max temp and avg temp have p values under 0.05
 ## min temp has a p-value of 0.0544, but others are all over 0.10
@@ -462,7 +472,7 @@ clim_long <- clim_long %>% filter(date > "2014-01-01")
 # d and D are constant across every model, the AICc / ΔAICc column in the final
 # output is fully comparable -- no cross-d apples-to-oranges problem.
 
-ds <- as.Date("2014-01-01"); de <- as.Date("2024-12-01")
+ds <- as.Date("2012-01-01"); de <- as.Date("2024-12-01")
 #run_2010 <- run_clade_arimax(state_prev, climate_state_wt, "Iowa", "2010.1like", ds, de)
 
 #run_2010$predictor_results      # which climate var best explains the clade
@@ -475,7 +485,8 @@ ds <- as.Date("2014-01-01"); de <- as.Date("2024-12-01")
 ## expand to multiple states and clades
 combos <- expand_grid(state = c("Iowa","Illinois","Indiana","Ohio","Pennsylvania","North Carolina",
                       "Michigan","Minnesota","South Dakota","Nebraska",
-                      "Texas","Oklahoma","Missouri","Kansas"),
+                      "Texas","Oklahoma","Missouri","Kansas", 
+                      "Arkansas","Kentucky"),
                       clade = c("2010.1like","1990.4.a"))
 #runs <- pmap(combos, ~ run_clade_arimax(state_prev, climate_state_wt, ..1, ..2, ds, de))
 #all_predictor_aic <- map_dfr(runs, "predictor_results")   # stacked, has state+clade cols
@@ -493,7 +504,8 @@ combos <- expand_grid(state = c("Iowa","Illinois","Indiana","Ohio","Pennsylvania
 # geographic: Midwest swine belt grouped, North Carolina (Southeast) last
 #forest_predictor(predictor_summary, state_levels = c("South Dakota","Minnesota","Michigan",
 #                                  "Nebraska","Iowa","Illinois","Indiana","Ohio","Pennsylvania",
-#                                  "Kansas","Oklahoma","Missouri","Texas","North Carolina"))
+#                                  "Kansas","Arkansas","Oklahoma","Missouri",
+#                                   "Texas","Kentucky","North Carolina"))
 
 
 # or order by sample size so the best-powered states sit on top
@@ -503,7 +515,20 @@ combos <- expand_grid(state = c("Iowa","Illinois","Indiana","Ohio","Pennsylvania
 # ggsave("predictor_forest.png", width = 9, height = 5, dpi = 300, bg = "white")
 
 
-## part five:   maps ----
+## part five:   gee for dominant clades ----
+
+## using the same climate variables specified in part 4
+## but the outcomes of new_dominant and major dominant
+## so logistic regression for a binary outcome ?
+## but gee as the data is time series, and starting in 2002 for these models
+## so should all states for those with at least 20 sequences from 2002-2024
+## and output a similar forest plot showing top predictor in each state
+
+
+
+
+
+## part six:    maps ----
 
 ## density of samples from each state
 ## pull table of all unique state names and number of sequences from each, including those with no state
@@ -547,6 +572,14 @@ tree_files <- list(
 #  SIMPLIFY = FALSE)
 
 
+## custom continous color palettes
+## Brighter / more saturated blues than RColorBrewer "Blues"
+pal_blue_bright <- c("#EAF4FF", "#A7D5FF", "#5FB2FF", "#1E90FF", "#0B66D0", "#063C86")
+## Yellow / gold sequential palette (pale -> gold -> goldenrod)
+pal_gold <- c("#FFFBEA", "#FFEDA8", "#FFD862", "#FFC107", "#E0A100", "#B8860B")
+## Magenta sequential palette (pale pink-magenta -> deep magenta)
+pal_magenta <- c("#FFEAF7", "#FBB8E8", "#F77FD6", "#EE3FBE", "#C9159C", "#7E0A66")
+
 ## overlapping lineage maps!
 ## 1990.4.a (blue) vs 1990.4.b (red)
 map_1990 <- make_overlap_map(
@@ -554,8 +587,8 @@ map_1990 <- make_overlap_map(
   tree_file_b = tree_files[["1990.4.b"]],
   name_a      = "1990.4.a",
   name_b      = "1990.4.b",
-  color_a     = "Greens",
-  color_b     = "Reds",
+  color_a     = pal_blue_bright,
+  color_b     = pal_gold,
   save_path   = "overlap_1990a_1990b.png")
 #map_1990
 
@@ -565,8 +598,8 @@ map_2010 <- make_overlap_map(
   tree_file_b = tree_files[["2010.2"]],
   name_a      = "2010.1",
   name_b      = "2010.2",
-  color_a     = "Purples",
-  color_b     = "Oranges",
+  color_a     = pal_blue_bright,
+  color_b     = pal_magenta,
   save_path   = "overlap_2010.1_2010.2.png")
 #map_2010
 

@@ -17,6 +17,7 @@ build_clade_xml <- function(clade_name, clade_tips, tip_meta_df,
   ## match tips to template (some tree tips may not be in XML if naming differs)
   keep <- clade_tips[clade_tips %in% names(taxon_dates) &
                        clade_tips %in% names(seq_seqs)]
+  keep <- unique(keep)   # guard: a taxon ID must appear exactly once per BEAST file
   
   ## look up state for each tip
   tip_states <- tip_meta_df$state[base::match(keep, tip_meta_df$sequence_name)]
@@ -1186,11 +1187,11 @@ get_kde_df <- function(tree_file,
     filter(density > quantile(density, density_quantile))
 }
 
-
+## overlapping lineage maps
 make_overlap_map <- function(tree_file_a, tree_file_b,
                              name_a, name_b,
-                             color_a          = "Blues",   # RColorBrewer name or scico palette
-                             color_b          = "Reds",
+                             color_a          = pal_blue_bright, # vector of colours, low -> high density
+                             color_b          = pal_gold,        # vector of colours, low -> high density
                              density_quantile = 0.50,
                              alpha_range      = c(0.15, 0.80),
                              map_xlim         = c(-105, -72),
@@ -1218,7 +1219,7 @@ make_overlap_map <- function(tree_file_a, tree_file_b,
     ## Clade A layer
     geom_tile(data = kde_a,
               aes(x = lon, y = lat, fill = dens_norm, alpha = dens_norm)) +
-    scale_fill_distiller(palette = color_a, direction = 1,
+    scale_fill_gradientn(colours = color_a,
                          name = name_a, guide = guide_colorbar(order = 1)) +
     scale_alpha_continuous(range = alpha_range, guide = "none") +
     
@@ -1226,7 +1227,7 @@ make_overlap_map <- function(tree_file_a, tree_file_b,
     ggnewscale::new_scale_fill() +
     geom_tile(data = kde_b,
               aes(x = lon, y = lat, fill = dens_norm, alpha = dens_norm)) +
-    scale_fill_distiller(palette = color_b, direction = 1,
+    scale_fill_gradientn(colours = color_b,
                          name = name_b, guide = guide_colorbar(order = 2)) +
     
     geom_sf(data = centers_data,
@@ -1249,4 +1250,3 @@ make_overlap_map <- function(tree_file_a, tree_file_b,
   
   return(p)
 }
-
