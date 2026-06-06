@@ -12,7 +12,7 @@ library(data.table)
 library(dplyr)
 library(exactextractr)
 library(forecast) 
-library(gee)
+library(geepack)
 library(ggnewscale)
 library(ggplot2)
 library(ggtree)
@@ -447,16 +447,19 @@ dominant <- dominant %>% arrange(state, year_month) %>% group_by(state) %>% muta
     major_dominant = ifelse(major_clade != prev_major & !is.na(prev_major) & major_clade %in% c("1990", "2010") &
     prev_major %in% c("1990", "2010"), 1, 0)) %>% ungroup()
 
+## change bins for precipitation and temp variables for forest plots
+climate_state_wt$Precipitation <- climate_state_wt$ppt/50
+climate_state_wt$Min_temp <- climate_state_wt$tmin/10
+climate_state_wt$Max_temp <- climate_state_wt$tmax/10
+climate_state_wt$Average_temp <- climate_state_wt$tavg/10
+climate_state_wt$Vapor_pressure <- climate_state_wt$vap
+climate_state_wt$Absolute_humidity <- climate_state_wt$abs_humidity 
+climate_state_wt$Wind_speed <- climate_state_wt$ws
 
-# Climate trend diagnostics for time-series pre-processing
-# Goal: decide whether each weighted climate variable carries a long-term
-#       trend that should be removed before time-series modeling, and see
-#       how those trends relate to major_dominant clade shifts.
-
-clim_vars <- c("tmax", "tmin", "tavg", "ppt", "vap", "ws", "abs_humidity")
+clim_vars <- c("Max_temp", "Min_temp", "Average_temp", "Precipitation", "Vapor_pressure", "Wind_speed", "Absolute_humidity")
 #is_major_shift <- function(df) df$major_dominant == 1
 
-# long-format climate data
+## long-format climate data
 clim <- climate_state_wt %>% mutate(date = as.Date(sprintf("%d-%02d-01", year, month)))
 clim_long <- clim %>% pivot_longer(all_of(clim_vars), names_to = "variable", values_to = "value") %>%
   mutate(variable = factor(variable, levels = clim_vars))  # keeps facet order
@@ -484,9 +487,8 @@ ds <- as.Date("2012-01-01"); de <- as.Date("2024-12-01")
 
 ## expand to multiple states and clades
 combos <- expand_grid(state = c("Iowa","Illinois","Indiana","Ohio","Pennsylvania","North Carolina",
-                      "Michigan","Minnesota","South Dakota","Nebraska",
-                      "Texas","Oklahoma","Missouri","Kansas", 
-                      "Arkansas","Kentucky"),
+                      "Minnesota","South Dakota","Nebraska",
+                      "Oklahoma","Missouri","Kansas","Arkansas"),
                       clade = c("2010.1like","1990.4.a"))
 #runs <- pmap(combos, ~ run_clade_arimax(state_prev, climate_state_wt, ..1, ..2, ds, de))
 #all_predictor_aic <- map_dfr(runs, "predictor_results")   # stacked, has state+clade cols
@@ -502,30 +504,63 @@ combos <- expand_grid(state = c("Iowa","Illinois","Indiana","Ohio","Pennsylvania
 ## for minimum temp (derivative) and precpitation... n = 75 obs so not the largest even
 
 # geographic: Midwest swine belt grouped, North Carolina (Southeast) last
-#forest_predictor(predictor_summary, state_levels = c("South Dakota","Minnesota","Michigan",
+#forest_predictor(predictor_summary, state_levels = c("South Dakota","Minnesota",
 #                                  "Nebraska","Iowa","Illinois","Indiana","Ohio","Pennsylvania",
-#                                  "Kansas","Arkansas","Oklahoma","Missouri",
-#                                   "Texas","Kentucky","North Carolina"))
-
-
-# or order by sample size so the best-powered states sit on top
-# state_levels = predictor_summary %>%
-#   group_by(state) %>% summarise(n = max(n_obs)) %>%
-#   arrange(desc(n)) %>% pull(state)            # OR forest, one panel per clade
-# ggsave("predictor_forest.png", width = 9, height = 5, dpi = 300, bg = "white")
+#                                  "Kansas","Arkansas","Oklahoma","Missouri","North Carolina"))
+#ggsave("predictor_forest.png", width = 12, height = 5, dpi = 300, bg = "white")
 
 
 ## part five:   gee for dominant clades ----
 
-## using the same climate variables specified in part 4
-## but the outcomes of new_dominant and major dominant
-## so logistic regression for a binary outcome ?
-## but gee as the data is time series, and starting in 2002 for these models
-## so should all states for those with at least 20 sequences from 2002-2024
-## and output a similar forest plot showing top predictor in each state
+## Same climate predictors as part four (predictor_columns(): detrended temps
+## *_dt + raw ppt/vap/ws/abs_humidity), but BINARY switching outcomes modeled
+## by GEE (binomial / logit) to handle within-state temporal correlation:
+##   new_dominant   : dominant clade changed vs the previous sequenced month
+##   major_dominant : dominant major lineage switched between 1990 and 2010
+## One model per state -> "top predictor per state" forest plot, faceted by
+## outcome. corstr = exchangeable, robust (sandwich) SE; months clustered by
+## calendar year. See part four-b of the functions file for the engine.
 
 
+## window. NOTE: tip_meta_assigned is filtered to year >= 2003 upstream (part
+## four), so although we ask for 2002 the series effectively begins 2003. To
+## truly start in 2002, relax that filter where state_prev is built.
+gee_start <- as.Date("2003-01-01")
+gee_end   <- as.Date("2024-12-31")
 
+## states with >= 20 sequences in the window
+gee_states_tbl <- qualifying_states(state_prev, gee_start, gee_end, min_seqs = 30)
+gee_states     <- gee_states_tbl$state
+#print(gee_states_tbl)
+
+## monthly dominant-clade panel for all qualifying states
+## (both outcomes + climate predictors, temps detrended within state)
+#dom_panel <- build_dominant_panel(state_prev, climate_state_wt, gee_states,
+#                                  gee_start, gee_end)
+
+## per-state, per-outcome GEE: rank climate predictors by QIC, keep the best,
+## robust-Wald inference + odds ratios, BH-adjusted across the family
+#gee_summary <- build_gee_summary(dom_panel, gee_states,
+#                                 outcomes   = c("new_dominant", "major_dominant"),
+#                                 id_var     = "year",
+#                                 corstr     = "exchangeable",
+#                                 min_events = 3,
+#                                 adjust     = TRUE)
+#gee_summary
+#write.csv(gee_summary, "C:/Users/cgait/OneDrive/Desktop/gee_summary.csv", row.names = FALSE)
+
+## gt table + forest plot (one row per state, faceted by outcome)
+#render_gee_table(gee_summary)
+#forest_gee(gee_summary)
+#ggsave("gee_predictor_forest.png", width = 9, height = 6, dpi = 300, bg = "white")
+
+## order states the same way as the part-four forest, or by sample size:
+#forest_gee(gee_summary, state_levels = gee_states_tbl$state)   # already sorted by n_seq desc
+
+## optional cross-check: one properly month-ordered AR-1 GEE clustered on STATE
+## per (outcome, predictor), to sanity-check the per-state estimates
+#fit_gee_pooled(dom_panel, "new_dominant",   "tavg_dt", corstr = "ar1")
+#fit_gee_pooled(dom_panel, "major_dominant", "ppt",     corstr = "ar1")
 
 
 ## part six:    maps ----
@@ -571,35 +606,23 @@ tree_files <- list(
 #  name = names(tree_files),
 #  SIMPLIFY = FALSE)
 
-
-## custom continous color palettes
-## Brighter / more saturated blues than RColorBrewer "Blues"
-pal_blue_bright <- c("#EAF4FF", "#A7D5FF", "#5FB2FF", "#1E90FF", "#0B66D0", "#063C86")
-## Yellow / gold sequential palette (pale -> gold -> goldenrod)
-pal_gold <- c("#FFFBEA", "#FFEDA8", "#FFD862", "#FFC107", "#E0A100", "#B8860B")
-## Magenta sequential palette (pale pink-magenta -> deep magenta)
-pal_magenta <- c("#FFEAF7", "#FBB8E8", "#F77FD6", "#EE3FBE", "#C9159C", "#7E0A66")
-
 ## overlapping lineage maps!
-## 1990.4.a (blue) vs 1990.4.b (red)
+## 1990.4.a (blue) vs 1990.4.b (gold)
 map_1990 <- make_overlap_map(
   tree_file_a = tree_files[["1990.4.a"]],
   tree_file_b = tree_files[["1990.4.b"]],
   name_a      = "1990.4.a",
   name_b      = "1990.4.b",
-  color_a     = pal_blue_bright,
-  color_b     = pal_gold,
+  color_a     = "forestgreen",   
+  color_b     = "orchid2",   
   save_path   = "overlap_1990a_1990b.png")
-#map_1990
 
-## 2010.1 (purple) vs 2010.2 (orange)
 map_2010 <- make_overlap_map(
   tree_file_a = tree_files[["2010.1"]],
   tree_file_b = tree_files[["2010.2"]],
   name_a      = "2010.1",
   name_b      = "2010.2",
-  color_a     = pal_blue_bright,
-  color_b     = pal_magenta,
+  color_a     = "orange",  
+  color_b     = "pink3",   
   save_path   = "overlap_2010.1_2010.2.png")
-#map_2010
 

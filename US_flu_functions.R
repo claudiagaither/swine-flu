@@ -488,8 +488,8 @@ build_clade_xml <- function(clade_name, clade_tips, tip_meta_df,
 
 # Default climate variables and which ones get detrended (the temps that
 # showed a significant linear trend in part 3A).
-clade_clim_vars    <- c("tmax", "tmin", "tavg", "ppt", "vap", "ws", "abs_humidity")
-clade_detrend_vars <- c("tmax", "tmin", "tavg")
+clade_clim_vars    <- c("Max_temp", "Min_temp", "Average_temp", "Precipitation", "Vapor_pressure", "Wind_speed", "Absolute_humidity")
+clade_detrend_vars <- c("Max_temp", "Min_temp", "Average_temp")
 
 
 # predictor_columns(): names of the columns fed to models = detrended temps
@@ -1006,6 +1006,30 @@ scale_y_reordered <- function(..., sep = "___") {
 }
 
 
+# Shared predictor -> colour map and clean-label helper, used by BOTH
+# forest_predictor() (ARIMA) and forest_gee() (GEE) so the SAME predictor keeps
+# the SAME colour across plots no matter which subset of predictors is selected.
+# Because the vector is NAMED, scale_color_manual() matches colours to predictor
+# values by name rather than by position, so dropping predictors (as in the GEE
+# plot) no longer shifts the colours. Keyed on both the raw and detrended (_dt)
+# column names so it works whether or not the temperatures were detrended.
+predictor_colors <- c(
+  Absolute_humidity = "turquoise",
+  Precipitation     = "cornflowerblue",
+  Max_temp          = "magenta",
+  Max_temp_dt       = "magenta",
+  Min_temp          = "darkblue",
+  Min_temp_dt       = "darkblue",
+  Vapor_pressure    = "tomato",
+  Wind_speed        = "gold",
+  Average_temp      = "seagreen",   # not in the requested 6; kept from old GEE palette
+  Average_temp_dt   = "seagreen")
+
+# clean_predictor_label(): drop the _dt detrend suffix and turn underscores into
+# spaces, e.g. "Max_temp_dt" -> "Max temp", "Absolute_humidity" -> "Absolute humidity".
+clean_predictor_label <- function(x) gsub("_", " ", sub("_dt$", "", x))
+
+
 # forest_predictor(): faceted forest plot of the SELECTED predictor's effect,
 # one panel per clade, one row per state, colored by which predictor was
 # chosen. Uses OR (log x-axis, null = 1) when the table carries OR columns,
@@ -1018,10 +1042,10 @@ forest_predictor <- function(sig_tbl, ncol = NULL, point_size = 3.2,
   d <- sig_tbl
   if (has_or) {
     d$est <- d$OR; d$lo <- d$OR_lower; d$hi <- d$OR_upper
-    null_line <- 1; xlab <- "Odds ratio (95% CI), log scale"; null_lab <- "OR = 1"
+    null_line <- 1; xlab <- "Odds ratio (95% CI), log scale"
   } else {
     d$est <- d$estimate; d$lo <- d$ci_lower; d$hi <- d$ci_upper
-    null_line <- 0; xlab <- "xreg coefficient (95% CI)"; null_lab <- "coef = 0"
+    null_line <- 0; xlab <- "xreg coefficient (95% CI)"
   }
   # one SHARED, fixed state order across both clade facets so rows line up and
   # you can read straight across the two clades. Pass state_levels to override.
@@ -1039,15 +1063,13 @@ forest_predictor <- function(sig_tbl, ncol = NULL, point_size = 3.2,
   p <- ggplot2::ggplot(d, ggplot2::aes(est, state, color = predictor)) +
     ggplot2::geom_vline(xintercept = null_line, linetype = "dashed",
                         color = "grey50") +
-    ggplot2::annotate("text", x = null_line, y = -Inf, label = null_lab,
-                      angle = 90, hjust = -0.05, vjust = -0.4,
-                      size = base_size / 3.2, color = "grey45") +
     ggplot2::geom_errorbar(ggplot2::aes(xmin = lo, xmax = hi),
                            orientation = "y", width = 0.25, linewidth = 0.6) +
     ggplot2::geom_point(ggplot2::aes(shape = sig), size = point_size,
                         stroke = 0.9, fill = "white") +
     ggplot2::facet_wrap(~ clade, ncol = ncol, scales = "free_x") +
-    ggplot2::scale_color_manual(values = c("turquoise","cornflowerblue","magenta","darkblue","tomato","gold"),
+    ggplot2::scale_color_manual(values = predictor_colors,
+                                labels = clean_predictor_label,
                                 name = "Selected predictor") +
     ggplot2::scale_shape_manual(name = "Significance",
                                 values = c(`FALSE` = 21, `TRUE` = 16),
@@ -1057,10 +1079,11 @@ forest_predictor <- function(sig_tbl, ncol = NULL, point_size = 3.2,
       x = xlab, y = NULL,
       title = "Selected climate predictor association, by clade",
       subtitle = paste("ARIMAX xreg at best-AICc order; one row per state.",
-                       "Exploratory \u2014 prevalence among sampled sequences.")) +
+                       "Exploratory \u2012-2024 prevalence among sampled sequences.")) +
     ggplot2::theme_minimal(base_size = base_size) +
     ggplot2::theme(panel.grid.major.y = ggplot2::element_blank(),
                    legend.position  = "bottom",
+                   legend.text = ggplot2::element_text(size = 14),
                    axis.text  = ggplot2::element_text(size = base_size + 2),
                    axis.title = ggplot2::element_text(size = base_size + 3),
                    strip.text = ggplot2::element_text(size = base_size + 2)) +
@@ -1070,7 +1093,331 @@ forest_predictor <- function(sig_tbl, ncol = NULL, point_size = 3.2,
 }
 
 
-## part five: maps ----
+## part five: GEE for dominant-clade switching ----
+
+# Models the monthly DOMINANT-clade switching of a state as a binary outcome,
+# using the SAME weighted climate predictors as the part-four ARIMAX models
+# (predictor_columns(): detrended temps *_dt + raw ppt/vap/ws/abs_humidity).
+# Because the monthly outcome is serially correlated within a state we use GEE
+# (binomial family, logit link) with a robust (sandwich) variance estimator.
+#
+# Two binary outcomes (built in build_dominant_panel below):
+#   new_dominant   : the state's dominant clade changed vs the previous
+#                    *sequenced* month (any clade -> any other clade)
+#   major_dominant : the dominant MAJOR lineage switched between 1990 and 2010
+#
+# Backend = geepack::geeglm. Unlike the `gee` package (already loaded), geepack
+# returns QIC -- the GEE analogue of AIC -- so we can rank candidate predictors
+# exactly the way fit_arimax_by_predictor() ranks them by AIC. Add to the
+# analysis script:  library(geepack)
+#
+# Clustering choice. We want a "top predictor per state" forest plot, so we fit
+# ONE model per state (independent selection, mirroring part four). Within a
+# state we cluster the monthly observations by CALENDAR YEAR (id = "year"); the
+# working correlation then models within-year serial correlation and the
+# sandwich SE is clustered by year. This sidesteps the irregular spacing of
+# sequenced months (we never grid in NA months -- only observed months enter).
+# Trade-off: month-to-month correlation that crosses a Dec->Jan boundary is not
+# modeled, but the robust SE still gives valid inference. For a properly
+# time-ordered alternative that DOES model the full monthly autocorrelation,
+# see fit_gee_pooled() (one AR-1 GEE clustered on state).
+
+gee_clim_vars    <- clade_clim_vars       # reuse part-four climate variables
+gee_detrend_vars <- clade_detrend_vars    # reuse part-four detrended temps
+
+# detrend_one(): residual of value ~ time index; na.exclude pads NAs back so the
+# returned vector aligns with the input rows (used inside grouped mutate).
+detrend_one <- function(x, t) as.numeric(resid(lm(x ~ t, na.action = na.exclude)))
+
+# major_clade_of(): collapse fine clade labels to the 1990 / 2010 / Human
+# super-lineages. Same mapping as the part-four `dominant` object, with 2010.2
+# and 2010.1 also folded into "2010" so a 2010.2-dominant month still counts as
+# a major lineage (the part-four version only coded 2010.1like).
+major_clade_of <- function(clade) {
+  dplyr::case_when(
+    clade %in% c("1990.1", "1990.4.a", "1990.4.b1b2", "1990.4.d", "1990.4.f",
+                 "1990.4.i", "1990.4.k", "1990.4like")        ~ "1990",
+    clade %in% c("2010.1like", "2010.1", "2010.2")            ~ "2010",
+    clade == "Other human"                                    ~ "Human",
+    TRUE ~ NA_character_)
+}
+
+# qualifying_states(): states with at least `min_seqs` sequences in the window
+# (counts every sequenced clade-month: sum of `count`). Returns a sorted tibble.
+qualifying_states <- function(state_prev, date_start, date_end, min_seqs = 20) {
+  state_prev %>%
+    dplyr::mutate(date = as.Date(year_month)) %>%
+    dplyr::filter(date >= date_start, date <= date_end) %>%
+    dplyr::group_by(state) %>%
+    dplyr::summarise(n_seq = sum(count), .groups = "drop") %>%
+    dplyr::filter(n_seq >= min_seqs) %>%
+    dplyr::arrange(dplyr::desc(n_seq))
+}
+
+# build_dominant_panel(): for every supplied state, find the monthly dominant
+# clade (max prevalence among that state's sequenced months), derive the two
+# binary switching outcomes, join the weighted climate series, and detrend the
+# flagged temps WITHIN each state. Returns one stacked modeling frame with the
+# *_dt columns so predictors match part four exactly.
+build_dominant_panel <- function(state_prev, climate_state_wt, states,
+                                 date_start, date_end,
+                                 clim_vars = gee_clim_vars,
+                                 detrend_vars = gee_detrend_vars) {
+
+  dom <- state_prev %>%
+    dplyr::mutate(date = as.Date(year_month)) %>%
+    dplyr::filter(state %in% states, date >= date_start, date <= date_end) %>%
+    dplyr::group_by(state, date) %>%
+    dplyr::slice_max(prevalence, n = 1, with_ties = FALSE) %>%   # dominant clade
+    dplyr::ungroup() %>%
+    dplyr::arrange(state, date) %>%
+    dplyr::group_by(state) %>%
+    dplyr::mutate(
+      prev_dominant  = dplyr::lag(clade),
+      new_dominant   = dplyr::if_else(clade != prev_dominant & !is.na(prev_dominant), 1L, 0L),
+      major_clade    = major_clade_of(clade),
+      prev_major     = dplyr::lag(major_clade),
+      major_dominant = dplyr::if_else(
+        major_clade != prev_major & !is.na(prev_major) &
+          major_clade %in% c("1990", "2010") & prev_major %in% c("1990", "2010"),
+        1L, 0L)) %>%
+    dplyr::ungroup()
+
+  clim <- climate_state_wt %>%
+    dplyr::mutate(date = as.Date(sprintf("%d-%02d-01", year, month))) %>%
+    dplyr::rename(state = STATE_NAME) %>%
+    dplyr::select(state, date, dplyr::all_of(clim_vars))
+
+  dom %>%
+    dplyr::left_join(clim, by = c("state", "date")) %>%
+    dplyr::arrange(state, date) %>%
+    dplyr::group_by(state) %>%
+    dplyr::mutate(
+      t_index = as.numeric(difftime(date, min(date), units = "days")),
+      year    = as.integer(format(date, "%Y")),
+      # detrend flagged temps within state (same as build_state_clade_data);
+      # t_index is created earlier in this mutate so across() can see it
+      dplyr::across(dplyr::all_of(detrend_vars),
+                    ~ detrend_one(.x, t_index), .names = "{.col}_dt")) %>%
+    dplyr::ungroup()
+}
+
+# fit_gee_by_predictor(): univariate GEE per climate predictor for ONE
+# (state, outcome), plus an intercept-only baseline, ranked by QIC. Skips a
+# predictor if, after dropping NAs, there are < 8 rows or the outcome has no
+# variation (all 0 / all 1). Mirrors fit_arimax_by_predictor().
+fit_gee_by_predictor <- function(panel, st, outcome,
+                                 predictors = predictor_columns(gee_clim_vars, gee_detrend_vars),
+                                 id_var = "year", corstr = "exchangeable") {
+
+  d0 <- panel %>% dplyr::filter(state == st) %>% dplyr::arrange(.data[[id_var]], date)
+
+  one <- function(label, rhs) {
+    vars <- c(outcome, id_var, if (!is.null(rhs)) rhs)
+    dd <- d0 %>% dplyr::filter(dplyr::if_all(dplyr::all_of(vars), ~ !is.na(.x)))
+    if (nrow(dd) < 8 || length(unique(dd[[outcome]])) < 2) return(NULL)
+    form <- stats::as.formula(paste(outcome, "~", if (is.null(rhs)) "1" else rhs))
+    fit <- suppressWarnings(tryCatch(
+      geepack::geeglm(form, id = dd[[id_var]], data = dd,
+                      family = stats::binomial(), corstr = corstr),
+      error = function(e) NULL))
+    if (is.null(fit)) return(NULL)
+    qic <- tryCatch(unname(geepack::QIC(fit)["QIC"]), error = function(e) NA_real_)
+    tibble::tibble(
+      state = st, outcome = outcome,
+      predictor  = if (is.null(rhs)) "none (baseline)" else label,
+      n_obs      = nrow(dd),
+      n_clusters = dplyr::n_distinct(dd[[id_var]]),
+      n_events   = sum(dd[[outcome]] == 1L),
+      QIC        = round(qic, 2))
+  }
+
+  dplyr::bind_rows(
+    one("none (baseline)", NULL),
+    purrr::map(predictors, ~ one(.x, .x))) %>%
+    dplyr::mutate(delta_QIC = round(QIC - min(QIC, na.rm = TRUE), 2)) %>%
+    dplyr::arrange(QIC)
+}
+
+# gee_predictor_significance(): pick the lowest-QIC predictor (excluding the
+# baseline), refit, and return one row of robust-Wald inference with odds
+# ratios. `min_events` guards against unstable logistic GEE fits when switching
+# events are too rare. Mirrors predictor_significance().
+gee_predictor_significance <- function(panel, st, outcome,
+                                       predictors = predictor_columns(gee_clim_vars, gee_detrend_vars),
+                                       id_var = "year", corstr = "exchangeable",
+                                       min_events = 3) {
+  ranked <- fit_gee_by_predictor(panel, st, outcome, predictors, id_var, corstr)
+  cand   <- ranked %>% dplyr::filter(predictor != "none (baseline)", !is.na(QIC))
+  if (nrow(cand) == 0L) return(NULL)
+  if (max(cand$n_events, na.rm = TRUE) < min_events) return(NULL)   # too few events
+
+  best     <- cand %>% dplyr::slice_min(QIC, n = 1, with_ties = FALSE) %>% dplyr::pull(predictor)
+  base_qic <- ranked$QIC[ranked$predictor == "none (baseline)"]
+  pred_qic <- ranked$QIC[ranked$predictor == best]
+  if (length(base_qic) == 0L) base_qic <- NA_real_
+
+  d0   <- panel %>% dplyr::filter(state == st) %>% dplyr::arrange(.data[[id_var]], date)
+  vars <- c(outcome, id_var, best)
+  dd   <- d0 %>% dplyr::filter(dplyr::if_all(dplyr::all_of(vars), ~ !is.na(.x)))
+  form <- stats::as.formula(paste(outcome, "~", best))
+  fit  <- suppressWarnings(tryCatch(
+    geepack::geeglm(form, id = dd[[id_var]], data = dd,
+                    family = stats::binomial(), corstr = corstr),
+    error = function(e) NULL))
+  if (is.null(fit)) return(NULL)
+
+  co  <- summary(fit)$coefficients          # Std.err here is the robust (sandwich) SE
+  est <- co[best, "Estimate"]; se <- co[best, "Std.err"]
+  z   <- est / se; p <- 2 * stats::pnorm(-abs(z))
+  lo  <- est - 1.96 * se; hi <- est + 1.96 * se
+
+  tibble::tibble(
+    state = st, outcome = outcome, predictor = best,
+    corstr = corstr, id = id_var,
+    n_obs = nrow(dd), n_clusters = dplyr::n_distinct(dd[[id_var]]),
+    n_events = sum(dd[[outcome]] == 1L),
+    estimate = round(est, 4), std_error = round(se, 4),
+    z = round(z, 3), p_value = signif(p, 3),
+    ci_lower = round(lo, 4), ci_upper = round(hi, 4),
+    OR = round(exp(est), 3), OR_lower = round(exp(lo), 3), OR_upper = round(exp(hi), 3),
+    delta_QIC_vs_baseline = round(pred_qic - base_qic, 2))
+}
+
+# build_gee_summary(): stack gee_predictor_significance() over every
+# state x outcome, adding a Benjamini-Hochberg FDR column across the whole
+# family of tests. Mirrors build_predictor_summary().
+build_gee_summary <- function(panel, states,
+                              outcomes = c("new_dominant", "major_dominant"),
+                              predictors = predictor_columns(gee_clim_vars, gee_detrend_vars),
+                              id_var = "year", corstr = "exchangeable",
+                              min_events = 3, adjust = TRUE) {
+  grid <- tidyr::expand_grid(state = states, outcome = outcomes)
+  tbl  <- purrr::pmap_dfr(grid, function(state, outcome)
+    gee_predictor_significance(panel, state, outcome, predictors,
+                               id_var, corstr, min_events))
+  if (nrow(tbl) == 0L) {
+    warning("No GEE models fit -- check min_events / qualifying states.")
+    return(tbl)
+  }
+  tbl <- tbl %>% dplyr::arrange(outcome, state)
+  if (adjust) tbl <- dplyr::mutate(tbl, p_BH = signif(stats::p.adjust(p_value, "BH"), 3))
+  tbl
+}
+
+# render_gee_table(): shaded gt of the selected-predictor GEE inference, grouped
+# by outcome. Shades the (BH-adjusted) p column. Mirrors render_significance_table().
+render_gee_table <- function(gee_tbl, by_outcome = TRUE) {
+  p_col <- if ("p_BH" %in% names(gee_tbl)) "p_BH" else "p_value"
+  keep  <- c("state", "predictor", "corstr", "n_obs", "n_clusters", "n_events",
+             "OR", "OR_lower", "OR_upper", "z", "p_value",
+             if ("p_BH" %in% names(gee_tbl)) "p_BH", "delta_QIC_vs_baseline")
+
+  g <- gee_tbl %>%
+    dplyr::select(outcome, dplyr::all_of(keep)) %>%
+    { if (by_outcome) gt::gt(., groupname_col = "outcome") else gt::gt(.) } %>%
+    gt::data_color(
+      columns = dplyr::all_of(p_col),
+      fn = scales::col_numeric(c("#1a9850", "#ffffbf", "#d73027"),
+                               domain = c(0, 1), na.color = "grey85")) %>%
+    gt::tab_header(
+      title    = gt::md("**Selected climate predictor per state x outcome (GEE)**"),
+      subtitle = gt::md(paste0(
+        "geeglm logit, robust (sandwich) SE; working corr clustered by ",
+        gee_tbl$id[1], ". OR = exp(coef); predictor chosen by QIC."))) %>%
+    gt::cols_label(OR_lower = "OR 2.5%", OR_upper = "OR 97.5%",
+                   delta_QIC_vs_baseline = "dQIC vs base") %>%
+    gt::tab_source_note(gt::md(
+      "_Exploratory: dominant clade is the max-prevalence clade among publicly_")) %>%
+    gt::tab_source_note(gt::md(
+      "_deposited sequences (convenience sample); predictor chosen by QIC then_")) %>%
+    gt::tab_source_note(gt::md(
+      "_tested on the same series, so p-values are associational only._"))
+  g
+}
+
+# forest_gee(): faceted forest plot of the selected predictor's odds ratio, one
+# panel per outcome, one row per state, colored by which predictor was chosen.
+# Binary/logit outcome so always on the OR (log) scale. The GEE twin of
+# forest_predictor().
+forest_gee <- function(gee_tbl, ncol = NULL, point_size = 3.2,
+                       state_levels = NULL, base_size = 13, sig_level = 0.10) {
+  d <- gee_tbl
+  d$est <- d$OR; d$lo <- d$OR_lower; d$hi <- d$OR_upper
+  null_line <- 1; xlab <- "Odds ratio (95% CI), log scale"; null_lab <- "OR = 1"
+
+  # one shared state order across both outcome facets so rows line up
+  if (is.null(state_levels)) state_levels <- sort(unique(d$state))
+  d$state <- factor(d$state, levels = rev(state_levels))
+
+  pcol  <- if ("p_BH" %in% names(d)) d$p_BH else d$p_value
+  p_src <- if ("p_BH" %in% names(d)) "BH p" else "p"
+  d$sig <- pcol < sig_level
+  lab_t <- sprintf("%s < %.2g", p_src, sig_level)
+  lab_f <- sprintf("%s \u2265 %.2g", p_src, sig_level)
+
+  ggplot2::ggplot(d, ggplot2::aes(est, state, color = predictor)) +
+    ggplot2::geom_vline(xintercept = null_line, linetype = "dashed", color = "grey50") +
+    ggplot2::annotate("text", x = null_line, y = -Inf, label = null_lab,
+                      angle = 90, hjust = -0.05, vjust = -0.4,
+                      size = base_size / 3.2, color = "grey45") +
+    ggplot2::geom_errorbar(ggplot2::aes(xmin = lo, xmax = hi),
+                           orientation = "y", width = 0.25, linewidth = 0.6) +
+    ggplot2::geom_point(ggplot2::aes(shape = sig), size = point_size,
+                        stroke = 0.9, fill = "white") +
+    ggplot2::facet_wrap(~ outcome, ncol = ncol, scales = "free_x") +
+    ggplot2::scale_color_manual(
+      values = predictor_colors,
+      labels = clean_predictor_label,
+      name = "Selected predictor") +
+    ggplot2::scale_shape_manual(name = "Significance",
+                                values = c(`FALSE` = 21, `TRUE` = 16),
+                                labels = c(`FALSE` = lab_f, `TRUE` = lab_t), drop = FALSE) +
+    ggplot2::scale_x_log10() +
+    ggplot2::labs(
+      x = xlab, y = NULL,
+      title = "Selected climate predictor association with dominant-clade switching",
+      subtitle = paste("GEE logit (robust SE); one row per state.",
+                       "Exploratory \u2014 dominant clade among sampled sequences.")) +
+    ggplot2::theme_minimal(base_size = base_size) +
+    ggplot2::theme(panel.grid.major.y = ggplot2::element_blank(),
+                   legend.position = "bottom",
+                   legend.text = ggplot2::element_text(size = 14),
+                   axis.text  = ggplot2::element_text(size = base_size + 2),
+                   axis.title = ggplot2::element_text(size = base_size + 3),
+                   strip.text = ggplot2::element_text(size = base_size + 2)) +
+    ggplot2::guides(color = ggplot2::guide_legend(override.aes = list(shape = 16)))
+}
+
+# fit_gee_pooled(): optional cross-check. ONE pooled GEE for a given
+# (outcome, predictor), clustering on STATE with an AR-1 working correlation on
+# the month-ordered series -- i.e. the fully time-ordered model that does carry
+# the cross-year monthly autocorrelation the per-state fits drop. Gives a single
+# pooled OR to sanity-check the per-state estimates against. (ar1 assumes
+# equally spaced rows within state; sequenced months are not perfectly spaced,
+# so read it as approximate.)
+fit_gee_pooled <- function(panel, outcome, predictor, corstr = "ar1") {
+  dd <- panel %>%
+    dplyr::arrange(state, date) %>%
+    dplyr::filter(!is.na(.data[[outcome]]), !is.na(.data[[predictor]]))
+  dd$state <- factor(dd$state)
+  form <- stats::as.formula(paste(outcome, "~", predictor))
+  fit  <- geepack::geeglm(form, id = dd$state, data = dd,
+                          family = stats::binomial(), corstr = corstr)
+  co  <- summary(fit)$coefficients
+  est <- co[predictor, "Estimate"]; se <- co[predictor, "Std.err"]
+  tibble::tibble(
+    outcome = outcome, predictor = predictor, corstr = corstr,
+    n_obs = nrow(dd), n_states = dplyr::n_distinct(dd$state),
+    estimate = round(est, 4), std_error = round(se, 4),
+    z = round(est / se, 3), p_value = signif(2 * stats::pnorm(-abs(est / se)), 3),
+    OR = round(exp(est), 3),
+    OR_lower = round(exp(est - 1.96 * se), 3),
+    OR_upper = round(exp(est + 1.96 * se), 3))
+}
+
+
+## part six: maps ----
 
 make_diffusion_map <- function(tree_file,
                                subclade_name,
@@ -1187,11 +1534,24 @@ get_kde_df <- function(tree_file,
     filter(density > quantile(density, density_quantile))
 }
 
+## mono_ramp(): build a sequential gradient from a SINGLE colour by shading it,
+## i.e. a pale tint (low density) -> the base colour -> a darkened shade (high
+## density). Lets make_overlap_map() take one colour per clade instead of a
+## hand-built palette vector. Dependency-free (base grDevices only).
+mono_ramp <- function(col, light = 0.90, dark = 0.45) {
+  base  <- grDevices::col2rgb(col)[, 1] / 255          # base colour as 0-1 RGB
+  tint  <- base + (1 - base) * light                   # mix toward white
+  shade <- base * dark                                 # mix toward black
+  c(grDevices::rgb(tint[1],  tint[2],  tint[3]),
+    col,
+    grDevices::rgb(shade[1], shade[2], shade[3]))
+}
+
 ## overlapping lineage maps
 make_overlap_map <- function(tree_file_a, tree_file_b,
                              name_a, name_b,
-                             color_a          = pal_blue_bright, # vector of colours, low -> high density
-                             color_b          = pal_gold,        # vector of colours, low -> high density
+                             color_a          = "#1E90FF", # single colour for clade A (shaded into a gradient)
+                             color_b          = "#FFC107", # single colour for clade B (shaded into a gradient)
                              density_quantile = 0.50,
                              alpha_range      = c(0.15, 0.80),
                              map_xlim         = c(-105, -72),
@@ -1219,7 +1579,7 @@ make_overlap_map <- function(tree_file_a, tree_file_b,
     ## Clade A layer
     geom_tile(data = kde_a,
               aes(x = lon, y = lat, fill = dens_norm, alpha = dens_norm)) +
-    scale_fill_gradientn(colours = color_a,
+    scale_fill_gradientn(colours = mono_ramp(color_a),
                          name = name_a, guide = guide_colorbar(order = 1)) +
     scale_alpha_continuous(range = alpha_range, guide = "none") +
     
@@ -1227,7 +1587,7 @@ make_overlap_map <- function(tree_file_a, tree_file_b,
     ggnewscale::new_scale_fill() +
     geom_tile(data = kde_b,
               aes(x = lon, y = lat, fill = dens_norm, alpha = dens_norm)) +
-    scale_fill_gradientn(colours = color_b,
+    scale_fill_gradientn(colours = mono_ramp(color_b),
                          name = name_b, guide = guide_colorbar(order = 2)) +
     
     geom_sf(data = centers_data,
