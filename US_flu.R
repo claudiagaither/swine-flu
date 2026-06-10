@@ -15,12 +15,14 @@ library(forecast)
 library(geepack)
 library(ggnewscale)
 library(ggplot2)
+library(ggthemes)
 library(ggtree)
 library(gt)
 library(lubridate)
 library(MASS)
 library(msa)
 library(paletteer)
+library(patchwork)
 library(Polychrome)
 library(phangorn)
 library(readxl)
@@ -503,11 +505,12 @@ combos <- expand_grid(state = c("Iowa","Illinois","Indiana","Ohio","Pennsylvania
 ## we see the onnly significant predictors in Missouri, but stable across parameterizations
 ## for minimum temp (derivative) and precpitation... n = 75 obs so not the largest even
 
+#predictor_summary <- read.csv("C:/Users/cgait/OneDrive/Desktop/swine flu/climate models/summary_predictor.csv")
 # geographic: Midwest swine belt grouped, North Carolina (Southeast) last
-#forest_predictor(predictor_summary, state_levels = c("South Dakota","Minnesota",
-#                                  "Nebraska","Iowa","Illinois","Indiana","Ohio","Pennsylvania",
-#                                  "Kansas","Arkansas","Oklahoma","Missouri","North Carolina"))
-#ggsave("predictor_forest.png", width = 12, height = 5, dpi = 300, bg = "white")
+#forest_predictor(predictor_summary, state_levels = c("Arkansas","Illinois","Indiana","Iowa",
+#                                   "Kansas", "Minnesota", "Missouri", "Nebraska", "North Carolina",                  
+#                                   "Ohio", "Oklahoma", "Pennsylvania","South Dakota"))
+#ggsave("predictor_forest.png", width = 14, height = 10, dpi = 300, bg = "white")
 
 
 ## part five:   gee for dominant clades ----
@@ -535,8 +538,8 @@ gee_states     <- gee_states_tbl$state
 
 ## monthly dominant-clade panel for all qualifying states
 ## (both outcomes + climate predictors, temps detrended within state)
-#dom_panel <- build_dominant_panel(state_prev, climate_state_wt, gee_states,
-#                                  gee_start, gee_end)
+dom_panel <- build_dominant_panel(state_prev, climate_state_wt, gee_states,
+                                  gee_start, gee_end)
 
 ## per-state, per-outcome GEE: rank climate predictors by QIC, keep the best,
 ## robust-Wald inference + odds ratios, BH-adjusted across the family
@@ -546,16 +549,13 @@ gee_states     <- gee_states_tbl$state
 #                                 corstr     = "exchangeable",
 #                                 min_events = 3,
 #                                 adjust     = TRUE)
-#gee_summary
 #write.csv(gee_summary, "C:/Users/cgait/OneDrive/Desktop/gee_summary.csv", row.names = FALSE)
 
 ## gt table + forest plot (one row per state, faceted by outcome)
 #render_gee_table(gee_summary)
 #forest_gee(gee_summary)
-#ggsave("gee_predictor_forest.png", width = 9, height = 6, dpi = 300, bg = "white")
+#ggsave("gee_predictor_forest.png", width = 15, height = 10, dpi = 300, bg = "white")
 
-## order states the same way as the part-four forest, or by sample size:
-#forest_gee(gee_summary, state_levels = gee_states_tbl$state)   # already sorted by n_seq desc
 
 ## optional cross-check: one properly month-ordered AR-1 GEE clustered on STATE
 ## per (outcome, predictor), to sanity-check the per-state estimates
@@ -594,35 +594,24 @@ tree_files <- list(
   "2010.2"     = "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/2010.2/mcc_2010.2_downsampled.trees")
 
 
-## Returns a named list of ggplot objects, and writes a PNG for each.
-#diffusion_maps <- mapply(
-#  FUN = function(file, name) {
-#    make_diffusion_map(
-#      tree_file     = file,
-#      subclade_name = name,
-#      save_path     = paste0(name, "_surface.png"))
-#  },
-#  file = tree_files,
-#  name = names(tree_files),
-#  SIMPLIFY = FALSE)
+## compute all four KDE surfaces (trees read once each)
+kde_list <- mapply(
+  FUN           = compute_diffusion_kde,
+  tree_file     = tree_files,
+  subclade_name = names(tree_files),
+  SIMPLIFY      = FALSE)
 
-## overlapping lineage maps!
-## 1990.4.a (blue) vs 1990.4.b (gold)
-map_1990 <- make_overlap_map(
-  tree_file_a = tree_files[["1990.4.a"]],
-  tree_file_b = tree_files[["1990.4.b"]],
-  name_a      = "1990.4.a",
-  name_b      = "1990.4.b",
-  color_a     = "forestgreen",   
-  color_b     = "orchid2",   
-  save_path   = "overlap_1990a_1990b.png")
+## global density range across all four
+global_limits <- range(unlist(lapply(kde_list, `[[`, "density")))
 
-map_2010 <- make_overlap_map(
-  tree_file_a = tree_files[["2010.1"]],
-  tree_file_b = tree_files[["2010.2"]],
-  name_a      = "2010.1",
-  name_b      = "2010.2",
-  color_a     = "orange",  
-  color_b     = "pink3",   
-  save_path   = "overlap_2010.1_2010.2.png")
+## build maps on the shared scale
+diffusion_maps <- mapply(
+  FUN  = function(df, name) plot_diffusion_map(df, name, fill_limits = global_limits),
+  df   = kde_list,
+  name = names(kde_list),
+  SIMPLIFY = FALSE)
+
+#subclade_maps <- wrap_plots(diffusion_maps, nrow = 2, ncol = 2) +
+#  plot_layout(guides = "collect")
+#ggsave("C:/Users/cgait/OneDrive/Desktop/subclade_maps.jpeg", width=25,height=25,units=c("cm"), subclade_maps)
 

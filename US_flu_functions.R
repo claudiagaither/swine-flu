@@ -1341,31 +1341,29 @@ render_gee_table <- function(gee_tbl, by_outcome = TRUE) {
 # Binary/logit outcome so always on the OR (log) scale. The GEE twin of
 # forest_predictor().
 forest_gee <- function(gee_tbl, ncol = NULL, point_size = 3.2,
-                       state_levels = NULL, base_size = 13, sig_level = 0.10) {
+                       state_levels = NULL, base_size = 13, sig_level = 0.10,
+                       outcome_labels = c(
+                         new_dominant   = "New dominant clade (any lineage)",
+                         major_dominant = "New major lineage as dominant clade")) {
   d <- gee_tbl
   d$est <- d$OR; d$lo <- d$OR_lower; d$hi <- d$OR_upper
   null_line <- 1; xlab <- "Odds ratio (95% CI), log scale"; null_lab <- "OR = 1"
-
   # one shared state order across both outcome facets so rows line up
   if (is.null(state_levels)) state_levels <- sort(unique(d$state))
   d$state <- factor(d$state, levels = rev(state_levels))
-
   pcol  <- if ("p_BH" %in% names(d)) d$p_BH else d$p_value
   p_src <- if ("p_BH" %in% names(d)) "BH p" else "p"
   d$sig <- pcol < sig_level
   lab_t <- sprintf("%s < %.2g", p_src, sig_level)
   lab_f <- sprintf("%s \u2265 %.2g", p_src, sig_level)
-
   ggplot2::ggplot(d, ggplot2::aes(est, state, color = predictor)) +
     ggplot2::geom_vline(xintercept = null_line, linetype = "dashed", color = "grey50") +
-    ggplot2::annotate("text", x = null_line, y = -Inf, label = null_lab,
-                      angle = 90, hjust = -0.05, vjust = -0.4,
-                      size = base_size / 3.2, color = "grey45") +
     ggplot2::geom_errorbar(ggplot2::aes(xmin = lo, xmax = hi),
                            orientation = "y", width = 0.25, linewidth = 0.6) +
     ggplot2::geom_point(ggplot2::aes(shape = sig), size = point_size,
                         stroke = 0.9, fill = "white") +
-    ggplot2::facet_wrap(~ outcome, ncol = ncol, scales = "free_x") +
+    ggplot2::facet_wrap(~ outcome, ncol = ncol, scales = "free_x",
+                        labeller = ggplot2::as_labeller(outcome_labels)) +
     ggplot2::scale_color_manual(
       values = predictor_colors,
       labels = clean_predictor_label,
@@ -1388,7 +1386,6 @@ forest_gee <- function(gee_tbl, ncol = NULL, point_size = 3.2,
                    strip.text = ggplot2::element_text(size = base_size + 2)) +
     ggplot2::guides(color = ggplot2::guide_legend(override.aes = list(shape = 16)))
 }
-
 # fit_gee_pooled(): optional cross-check. ONE pooled GEE for a given
 # (outcome, predictor), clustering on STATE with an AR-1 working correlation on
 # the month-ordered series -- i.e. the fully time-ordered model that does carry
@@ -1418,95 +1415,15 @@ fit_gee_pooled <- function(panel, outcome, predictor, corstr = "ar1") {
 
 
 ## part six: maps ----
-
-make_diffusion_map <- function(tree_file,
-                               subclade_name,
-                               lat_col          = "location1",
-                               lon_col          = "location2",
-                               pad              = 4.0,
-                               bw_mult_lon      = 1.2,
-                               bw_mult_lat      = 1.5,
-                               kde_n            = 400,
-                               density_quantile = 0.50,
-                               map_xlim         = c(-105, -72),
-                               map_ylim         = c(24, 50),
-                               states_data      = states,
-                               centers_data     = state_centers,
-                               save_path        = NULL,
-                               save_width       = 9,
-                               save_height      = 7,
-                               save_dpi         = 300) {
-  
-  ## Read tree and pull node table
-  mcc_tree  <- read.beast(tree_file)
-  node_data <- as_tibble(mcc_tree)
-  
-  ## Extract node coordinates
-  coords <- node_data %>%
-    filter(!is.na(.data[[lat_col]]), !is.na(.data[[lon_col]])) %>%
-    mutate(lat = as.numeric(.data[[lat_col]]),
-           lon = as.numeric(.data[[lon_col]])) %>%
-    dplyr::select(node, label, lat, lon, height)
-  
-  ## KDE bounds (data extent + padding)
-  lon_range <- c(min(coords$lon) - pad, max(coords$lon) + pad)
-  lat_range <- c(min(coords$lat) - pad, max(coords$lat) + pad)
-  
-  ## 2D kernel density estimate
-  kde <- MASS::kde2d(
-    x    = coords$lon,
-    y    = coords$lat,
-    n    = kde_n,
-    lims = c(lon_range, lat_range),
-    h    = c(MASS::bandwidth.nrd(coords$lon) * bw_mult_lon,
-             MASS::bandwidth.nrd(coords$lat) * bw_mult_lat)
-  )
-  
-  ## Convert KDE to data frame, keep top cells only
-  kde_df <- expand.grid(lon = kde$x, lat = kde$y) %>%
-    mutate(density = as.vector(kde$z)) %>%
-    filter(density > quantile(density, density_quantile))
-  
-  ## Build plot
-  p <- ggplot() +
-    geom_sf(data = states_data,
-            fill = "#f0ede8", color = "#d0ccc8", linewidth = 0.3) +
-    geom_tile(data = kde_df,
-              aes(x = lon, y = lat, fill = density, alpha = density)) +
-    scale_fill_scico(palette = "hawaii", direction = -1, name = "Density") +
-    scale_alpha_continuous(range = c(0.2, 0.9), guide = "none") +
-    geom_sf(data = centers_data,
-            color = "pink4", fill = "gold", size = 3, shape = 22) +
-    coord_sf(xlim = map_xlim, ylim = map_ylim, expand = FALSE) +
-    theme_classic(base_size = 16) +
-    theme(legend.position    = "right",
-          legend.key.height  = unit(1.2, "cm"),
-          plot.title         = element_text(face = "bold", size = 18),
-          axis.line          = element_blank(),
-          axis.ticks         = element_blank(),
-          axis.text          = element_blank()) +
-    labs(subtitle = sprintf("KDE of %s locations from subclade MCC tree",
-                            subclade_name), x = "", y = "")
-  
-  ## Optional save
-  if (!is.null(save_path)) {
-    ggsave(save_path, plot = p,
-           width = save_width, height = save_height,
-           dpi = save_dpi, bg = "white")
-  }
-  
-  return(p)
-}
-
-
-get_kde_df <- function(tree_file,
-                       lat_col          = "location1",
-                       lon_col          = "location2",
-                       pad              = 4.0,
-                       bw_mult_lon      = 1.2,
-                       bw_mult_lat      = 1.5,
-                       kde_n            = 400,
-                       density_quantile = 0.50) {
+compute_diffusion_kde <- function(tree_file,
+                                  subclade_name,
+                                  lat_col          = "location1",
+                                  lon_col          = "location2",
+                                  pad              = 4.0,
+                                  bw_mult_lon      = 1.2,
+                                  bw_mult_lat      = 1.5,
+                                  kde_n            = 400,
+                                  density_quantile = 0.50) {
   
   mcc_tree  <- read.beast(tree_file)
   node_data <- as_tibble(mcc_tree)
@@ -1530,83 +1447,40 @@ get_kde_df <- function(tree_file,
   )
   
   expand.grid(lon = kde$x, lat = kde$y) %>%
-    mutate(density = as.vector(kde$z)) %>%
+    mutate(density  = as.vector(kde$z),
+           subclade = subclade_name) %>%
     filter(density > quantile(density, density_quantile))
 }
 
-## mono_ramp(): build a sequential gradient from a SINGLE colour by shading it,
-## i.e. a pale tint (low density) -> the base colour -> a darkened shade (high
-## density). Lets make_overlap_map() take one colour per clade instead of a
-## hand-built palette vector. Dependency-free (base grDevices only).
-mono_ramp <- function(col, light = 0.90, dark = 0.45) {
-  base  <- grDevices::col2rgb(col)[, 1] / 255          # base colour as 0-1 RGB
-  tint  <- base + (1 - base) * light                   # mix toward white
-  shade <- base * dark                                 # mix toward black
-  c(grDevices::rgb(tint[1],  tint[2],  tint[3]),
-    col,
-    grDevices::rgb(shade[1], shade[2], shade[3]))
-}
 
-## overlapping lineage maps
-make_overlap_map <- function(tree_file_a, tree_file_b,
-                             name_a, name_b,
-                             color_a          = "#1E90FF", # single colour for clade A (shaded into a gradient)
-                             color_b          = "#FFC107", # single colour for clade B (shaded into a gradient)
-                             density_quantile = 0.50,
-                             alpha_range      = c(0.15, 0.80),
-                             map_xlim         = c(-105, -72),
-                             map_ylim         = c(24, 50),
-                             states_data      = states,
-                             centers_data     = state_centers,
-                             save_path        = NULL,
-                             save_width       = 9,
-                             save_height      = 7,
-                             save_dpi         = 300) {
+plot_diffusion_map <- function(kde_df,
+                               subclade_name,
+                               fill_limits  = NULL,
+                               map_xlim     = c(-105, -72),
+                               map_ylim     = c(24, 50),
+                               states_data  = states,
+                               centers_data = state_centers) {
   
-  kde_a <- get_kde_df(tree_file_a, density_quantile = density_quantile) %>%
-    mutate(clade = name_a)
-  kde_b <- get_kde_df(tree_file_b, density_quantile = density_quantile) %>%
-    mutate(clade = name_b)
-  
-  ## Normalize densities within each clade to [0,1] so color scales are comparable
-  kde_a <- kde_a %>% mutate(dens_norm = (density - min(density)) / diff(range(density)))
-  kde_b <- kde_b %>% mutate(dens_norm = (density - min(density)) / diff(range(density)))
-  
-  p <- ggplot() +
+  ggplot() +
     geom_sf(data = states_data,
             fill = "#f0ede8", color = "#d0ccc8", linewidth = 0.3) +
-    
-    ## Clade A layer
-    geom_tile(data = kde_a,
-              aes(x = lon, y = lat, fill = dens_norm, alpha = dens_norm)) +
-    scale_fill_gradientn(colours = mono_ramp(color_a),
-                         name = name_a, guide = guide_colorbar(order = 1)) +
-    scale_alpha_continuous(range = alpha_range, guide = "none") +
-    
-    ## Clade B layer — uses ggnewscale to register a second fill scale
-    ggnewscale::new_scale_fill() +
-    geom_tile(data = kde_b,
-              aes(x = lon, y = lat, fill = dens_norm, alpha = dens_norm)) +
-    scale_fill_gradientn(colours = mono_ramp(color_b),
-                         name = name_b, guide = guide_colorbar(order = 2)) +
-    
+    geom_tile(data = kde_df,
+              aes(x = lon, y = lat, fill = density, alpha = density)) +
+    scale_fill_paletteer_c("ggthemes::Purple", 1,
+                           name   = "Density",
+                           limits = fill_limits,
+                           oob    = scales::squish) +
+    scale_alpha_continuous(range = c(0.2, 0.9), guide = "none") +
     geom_sf(data = centers_data,
             color = "pink4", fill = "gold", size = 3, shape = 22) +
     coord_sf(xlim = map_xlim, ylim = map_ylim, expand = FALSE) +
     theme_classic(base_size = 16) +
     theme(legend.position   = "right",
           legend.key.height = unit(1.2, "cm"),
-          axis.line  = element_blank(),
-          axis.ticks = element_blank(),
-          axis.text  = element_blank()) +
-    labs(title    = paste(name_a, "vs", name_b, "— overlapping KDE"),
-         subtitle = "Node location density from subclade MCC trees",
-         x = "", y = "")
-  
-  if (!is.null(save_path))
-    ggsave(save_path, plot = p,
-           width = save_width, height = save_height,
-           dpi = save_dpi, bg = "white")
-  
-  return(p)
+          plot.title        = element_text(face = "bold", size = 18),
+          axis.line         = element_blank(),
+          axis.ticks        = element_blank(),
+          axis.text         = element_blank()) +
+    labs(subtitle = subclade_name, x = "", y = "")
 }
+
