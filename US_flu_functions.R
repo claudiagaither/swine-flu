@@ -1484,3 +1484,54 @@ plot_diffusion_map <- function(kde_df,
     labs(subtitle = subclade_name, x = "", y = "")
 }
 
+
+compute_node_posteriors <- function(tree_file,
+                                    subclade_name,
+                                    lat_col = "location1",
+                                    lon_col = "location2") {
+  
+  mcc_tree  <- read.beast(tree_file)
+  node_data <- as_tibble(mcc_tree)
+  
+  node_data %>% filter(!is.na(.data[[lat_col]]),
+           !is.na(.data[[lon_col]]),
+           !is.na(posterior)) %>%                       # drops tips + unsupported root
+    mutate(lat       = as.numeric(.data[[lat_col]]),
+           lon       = as.numeric(.data[[lon_col]]),
+           posterior = as.numeric(posterior),
+           subclade  = subclade_name) %>%
+    dplyr::select(node, label, lat, lon, height, posterior, subclade) #%>%
+#    arrange(posterior)                                  # high-support nodes drawn on top
+}
+
+plot_posterior_map <- function(node_df,
+                               subclade_name,
+                               fill_limits  = c(0, 1),
+                               map_xlim     = c(-105, -72),
+                               map_ylim     = c(24, 50),
+                               states_data  = states,
+                               centers_data = state_centers) {
+  
+  ggplot() + geom_sf(data = states_data,
+            fill = "#f0ede8", color = "#d0ccc8", linewidth = 0.3) +
+    geom_point(data = node_df,
+               aes(x = lon, y = lat, fill = posterior, size = 0.35),
+               shape = 21, color = "grey20", stroke = 0.3, alpha = 0.85, 
+               position = position_jitter(width = 0.2, height = 0.2)) +
+    scale_fill_paletteer_c("grDevices::ArmyRose", 1,
+                           name   = "Posterior",
+                           limits = fill_limits,
+                           oob    = scales::squish) +
+    scale_size_continuous(range = c(1, 5), limits = fill_limits, guide = "none") +
+    geom_sf(data = centers_data,
+            color = "pink4", fill = "skyblue2", size = 3, shape = 22) +
+    coord_sf(xlim = map_xlim, ylim = map_ylim, expand = FALSE) +
+    theme_classic(base_size = 16) +
+    theme(legend.position   = "right",
+          legend.key.height = unit(1.2, "cm"),
+          plot.title        = element_text(face = "bold", size = 18),
+          axis.line         = element_blank(),
+          axis.ticks        = element_blank(),
+          axis.text         = element_blank()) +
+    labs(subtitle = subclade_name, x = "", y = "")
+}

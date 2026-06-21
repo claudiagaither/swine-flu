@@ -538,8 +538,8 @@ gee_states     <- gee_states_tbl$state
 
 ## monthly dominant-clade panel for all qualifying states
 ## (both outcomes + climate predictors, temps detrended within state)
-dom_panel <- build_dominant_panel(state_prev, climate_state_wt, gee_states,
-                                  gee_start, gee_end)
+#dom_panel <- build_dominant_panel(state_prev, climate_state_wt, gee_states,
+#                                  gee_start, gee_end)
 
 ## per-state, per-outcome GEE: rank climate predictors by QIC, keep the best,
 ## robust-Wald inference + odds ratios, BH-adjusted across the family
@@ -593,7 +593,6 @@ tree_files <- list(
   "2010.1" = "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/2010.1like/mcc_2010.1like_downsampled.trees",
   "2010.2"     = "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/2010.2/mcc_2010.2_downsampled.trees")
 
-
 ## compute all four KDE surfaces (trees read once each)
 kde_list <- mapply(
   FUN           = compute_diffusion_kde,
@@ -611,7 +610,22 @@ diffusion_maps <- mapply(
   name = names(kde_list),
   SIMPLIFY = FALSE)
 
-#subclade_maps <- wrap_plots(diffusion_maps, nrow = 2, ncol = 2) +
-#  plot_layout(guides = "collect")
+#subclade_maps <- wrap_plots(diffusion_maps, nrow = 2, ncol = 2 + plot_layout(guides = "collect")
 #ggsave("C:/Users/cgait/OneDrive/Desktop/subclade_maps.jpeg", width=25,height=25,units=c("cm"), subclade_maps)
+
+## node posterior support within subclades
+posterior_list <- mapply(
+  FUN           = compute_node_posteriors,
+  tree_file     = tree_files,
+  subclade_name = names(tree_files),
+  SIMPLIFY      = FALSE)
+
+## posterior is a probability -> fixed 0-1 scale across all four
+posterior_maps <- mapply(
+  FUN  = function(df, name) plot_posterior_map(df, name, fill_limits = c(0, 1)),
+  df   = posterior_list,
+  name = names(posterior_list),
+  SIMPLIFY = FALSE)
+#posterior_maps <- wrap_plots(posterior_maps, nrow = 2, ncol = 2) + plot_layout(guides = "collect")
+#ggsave("C:/Users/cgait/OneDrive/Desktop/posterior_maps.jpeg", width=30, height=25, units = c("cm"), posterior_maps)
 
