@@ -409,7 +409,6 @@ remove(doc, taxa_nodes, chain_length, log_every, out_dir, save_every, xml_path,
 ## add a year-month column for grouping
 tip_meta_assigned <- tip_meta_assigned %>% mutate(year_month = floor_date(as.Date(date), "month"))
 tip_meta_assigned$year <- as.integer(format(tip_meta_assigned$year_month, "%Y"))
-tip_meta_assigned <- tip_meta_assigned %>% filter(year > 1990)
 tip_meta_assigned <- tip_meta_assigned %>% filter(year >= 2003)
 #hist(tip_meta_assigned$year)
 #table(tip_meta_assigned$state)
@@ -436,7 +435,7 @@ dominant <- state_prev_filtered %>% group_by(state, year_month) %>%
   slice_max(prevalence, n = 1, with_ties = FALSE) %>% ungroup() %>% arrange(state, year_month) %>% group_by(state) %>%
   mutate(prev_dominant = dplyr::lag(clade),new_dominant = ifelse(clade != prev_dominant & !is.na(prev_dominant), 1, 0)) %>% ungroup()
 
-## code indicator for major clades
+## code indicator for lineages
 dominant <- dominant %>% mutate(major_clade = case_when(
             clade == "1990.1" ~ "1990", clade == "1990.4.a" ~ "1990",
             clade == "1990.4.b1b2" ~ "1990", clade == "1990.4.d" ~ "1990",
@@ -444,7 +443,7 @@ dominant <- dominant %>% mutate(major_clade = case_when(
             clade == "1990.4.k" ~ "1990", clade == "1990.4like" ~ "1990",
             clade == "2010.1like" ~ "2010", clade == "Other human" ~ "Human", TRUE ~ NA))
 
-## indicator outcome of shift between the 2 major clades 
+## indicator outcome of shift between the 2 major lineages
 dominant <- dominant %>% arrange(state, year_month) %>% group_by(state) %>% mutate(prev_major = dplyr::lag(major_clade),
     major_dominant = ifelse(major_clade != prev_major & !is.na(prev_major) & major_clade %in% c("1990", "2010") &
     prev_major %in% c("1990", "2010"), 1, 0)) %>% ungroup()
@@ -586,12 +585,16 @@ state_locations <- state_locations %>% filter(state %in% states$NAME)
 ## swine centers for each state
 state_centers <- st_as_sf(state_locations, coords = c("longitude", "latitude"), crs = 4326)
 
-## KDE for node density surfaces within subclades
+## KDE for node density surfaces within clades
 tree_files <- list(
-  "1990.4.a"   = "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/1990.4.a/mcc_1990.4.a_downsampled.trees",
-  "1990.4.b"   = "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/1990.4.b1b2/mcc_1990.4.b1b2_downsampled.trees",
-  "2010.1" = "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/2010.1like/mcc_2010.1like_downsampled.trees",
-  "2010.2"     = "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/2010.2/mcc_2010.2_downsampled.trees")
+  "1990.4.a"= "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/1990.4.a/mcc_1990.4.a_downsampled.trees",
+  "1990.4.b"= "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/1990.4.b1b2/mcc_1990.4.b1b2_downsampled.trees",
+  "2010.1"  = "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/2010.1like/mcc_2010.1like_downsampled.trees",
+  "2010.2"  = "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/2010.2/mcc_2010.2_downsampled.trees")
+## smaller subclades (make tips = 13 have much lower densities so not included in results)
+#  "1990.4.e"= "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/smaller_subclades/mcc_1990.4.e.trees",
+#  "1990.4.f"= "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/smaller_subclades/mcc_1990.4.f.trees")
+#  "1990.4.i"= "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/smaller_subclades/mcc_1990.4.i.trees")
 
 ## compute all four KDE surfaces (trees read once each)
 kde_list <- mapply(
@@ -609,9 +612,8 @@ diffusion_maps <- mapply(
   df   = kde_list,
   name = names(kde_list),
   SIMPLIFY = FALSE)
-
-#subclade_maps <- wrap_plots(diffusion_maps, nrow = 2, ncol = 2 + plot_layout(guides = "collect")
-#ggsave("C:/Users/cgait/OneDrive/Desktop/subclade_maps.jpeg", width=25,height=25,units=c("cm"), subclade_maps)
+#subclade_maps <- wrap_plots(diffusion_maps, nrow = 2, ncol = 2 + plot_layout(guides = "collect"))
+#ggsave("C:/Users/cgait/OneDrive/Desktop/subclade_maps_smaller.jpeg", width=25,height=15,units=c("cm"), subclade_maps)
 
 ## node posterior support within subclades
 posterior_list <- mapply(
@@ -620,12 +622,16 @@ posterior_list <- mapply(
   subclade_name = names(tree_files),
   SIMPLIFY      = FALSE)
 
+# Proportion above a single threshold for every clade
+sapply(posterior_list, function(df) mean(df$posterior > 0.5))
+sapply(posterior_list, function(df) mean(df$posterior > 0.8))
+
 ## posterior is a probability -> fixed 0-1 scale across all four
 posterior_maps <- mapply(
   FUN  = function(df, name) plot_posterior_map(df, name, fill_limits = c(0, 1)),
   df   = posterior_list,
   name = names(posterior_list),
   SIMPLIFY = FALSE)
-#posterior_maps <- wrap_plots(posterior_maps, nrow = 2, ncol = 2) + plot_layout(guides = "collect")
-#ggsave("C:/Users/cgait/OneDrive/Desktop/posterior_maps.jpeg", width=30, height=25, units = c("cm"), posterior_maps)
+#posterior_maps <- wrap_plots(posterior_maps, nrow = 2, ncol = 2 + plot_layout(guides = "collect"))
+#ggsave("C:/Users/cgait/OneDrive/Desktop/posterior_maps_smaller.jpeg", width=25, height=15, units = c("cm"), posterior_maps)
 
