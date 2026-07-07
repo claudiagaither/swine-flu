@@ -1,6 +1,118 @@
 ## H3N2 influenza A transmission among domestic swine in the US
 ## phylogeography and ecological predictors of transmission!
 
+## part zero:   climate data pull ----
+
+## slotted after hog census data and packages are loaded 
+## filter for counties represented by hog census?
+#hogs_county <- hog_census %>% filter(AGG_LEVEL_DESC == "COUNTY")
+
+# 5-digit FIPS key from your hog data
+#my_fips <- hogs_county %>%
+#  mutate(GEOID = sprintf("%02d%03d", as.integer(STATE_ANSI), as.integer(COUNTY_ANSI))) %>%
+#  distinct(GEOID, STATE_NAME)
+
+# county polygons (CRAN, FIPS-keyed)
+#cty <- counties(cb = TRUE, year = 2022) %>% filter(GEOID %in% my_fips$GEOID)
+
+#vars   <- c("tmax", "tmin", "ppt", "vap", "ws")
+#chunks <- list(c("1990-01-01","1999-12-31"), c("2000-01-01","2009-12-31"),
+#               c("2010-01-01","2019-12-31"), c("2020-01-01","2024-12-31"))   # see note on end date below
+
+## helper: getTerraClim -> county means (exactextractr) -> tidy long
+#tidy_var <- function(aoi, v, start, end) {
+#  r     <- getTerraClim(AOI = aoi, varname = v, startDate = start, endDate = end)
+#  ras   <- r[[1]]
+#  dates <- as.Date(terra::time(ras))                 # one date per layer
+#  
+#  vals  <- exact_extract(ras, aoi, "mean", progress = FALSE)  # cols in layer order
+#  stopifnot(ncol(vals) == length(dates))             # guard against a column surprise
+#  
+#  cbind(GEOID = aoi$GEOID, vals) %>%
+#    setNames(c("GEOID", as.character(dates))) %>%
+#    pivot_longer(-GEOID, names_to = "date", values_to = "value") %>%
+#    mutate(date  = as.Date(date),
+#           year  = as.integer(format(date, "%Y")),
+#           month = as.integer(format(date, "%m")),
+#           variable = v)
+#}
+
+## runner: one state at a time, save as you go, auto-resume 
+#dir.create("climate_out", showWarnings = FALSE)
+#all_states <- list()
+
+#for (st in states20) {
+#  fpath <- file.path("climate_out", paste0(gsub(" ", "_", st), ".rds"))
+#  if (file.exists(fpath)) { all_states[[st]] <- readRDS(fpath); next }  # resume
+#  
+#  aoi_st <- cty %>%
+#    dplyr::filter(STATE_NAME == st) %>%
+#    dplyr::select(GEOID, NAME) %>%
+#    sf::st_transform(4326)
+#  
+#  pieces <- list()
+#  for (v in vars) for (ch in chunks) {
+#    pieces[[paste(v, ch[1])]] <- tryCatch(
+#      tidy_var(aoi_st, v, ch[1], ch[2]),
+#      error = function(e) { message("  skip ", st, " ", v, " ", ch[1],
+#                                    ": ", conditionMessage(e)); NULL })
+#    Sys.sleep(0.5)
+#  }
+#  out <- bind_rows(pieces) %>% mutate(STATE_NAME = st)
+#  saveRDS(out, fpath)
+#  all_states[[st]] <- out
+#  message("done: ", st, "  (", n_distinct(out$GEOID), " counties)")
+#}
+
+#climate_long <- bind_rows(all_states)
+#climate_long <- distinct(climate_long, GEOID, date, variable, .keep_all = TRUE)
+
+#climate_county <- climate_long %>% pivot_wider(names_from = variable, values_from = value) %>%
+#  mutate(tavg = (tmax + tmin) / 2, abs_humidity = 2167.4 * vap / (tavg + 273.15))
+#write.csv(climate_county, "C:/Users/cgait/OneDrive/Desktop/climate_county.csv")
+
+#climate_state <- climate_county %>% group_by(STATE_NAME, year, month) %>%
+#  summarise(across(c(tmax, tmin, tavg, ppt, vap, ws, abs_humidity), ~mean(.x, na.rm = TRUE)), .groups = "drop")
+#write.csv(climate_state, "C:/Users/cgait/OneDrive/Desktop/climate_state.csv")
+
+
+## per-county hog INVENTORY weights from the annual survey
+#survey_weights <- hog_survey %>% filter(Geo.Level  == "COUNTY",
+#                                        Commodity  == "HOGS",
+#                                        Data.Item == "HOGS - INVENTORY",   # inventory, not sales
+#                                        Domain == "TOTAL", Domain.Category == "NOT SPECIFIED",
+#                                        !is.na(State.ANSI), !is.na(County.ANSI)) %>%   # drops "OTHER COUNTIES"/district rows
+#  transmute(GEOID       = sprintf("%02d%03d", as.integer(State.ANSI), as.integer(County.ANSI)),
+#    survey_year = as.integer(Year),
+#    head        = as.numeric(gsub(",", "", Value))      # "(D)"/"(Z)" -> NA on coercion
+#  ) %>% filter(!is.na(head)) %>% group_by(GEOID, survey_year) %>%     # collapse any duplicate Periods in a year
+#  summarise(head = mean(head, na.rm = TRUE), .groups = "drop")
+
+## suppression check: usable counties per year
+#survey_weights %>% dplyr::count(survey_year) %>% arrange(survey_year)
+
+## normalize FIPS first — read.csv likely stripped leading zeros from GEOID
+#climate_county <- climate_county %>% mutate(GEOID = sprintf("%05d", as.integer(GEOID)))
+#sw <- as.data.table(survey_weights)[, .(GEOID, year = survey_year, head)]
+#setkey(sw, GEOID, year)
+#cc_keys <- as.data.table(distinct(climate_county, GEOID, year))
+#setkey(cc_keys, GEOID, year)
+
+## within each GEOID, pull head from the closest available survey year
+#county_year_wt <- as.data.frame(sw[cc_keys, roll = "nearest"])   # -> GEOID, year, head
+
+#wmean <- function(x, w) {
+#  ok <- is.finite(x) & is.finite(w) & w > 0
+#  if (!any(ok)) NA_real_ else sum(x[ok] * w[ok]) / sum(w[ok])
+#}
+
+#climate_state_wt <- climate_county %>% left_join(county_year_wt, by = c("GEOID", "year")) %>%
+#  group_by(STATE_NAME, year, month) %>% summarise(across(c(tmax, tmin, tavg, ppt, vap, ws, abs_humidity),
+#                   ~ wmean(.x, head)), .groups = "drop")
+
+#write.csv(climate_state_wt, "C:/Users/cgait/OneDrive/Desktop/climate_state_wt.csv", row.names = FALSE)
+
+
 ## part one:    metadata ----
 set.seed(1738)
 source("C:/Users/cgait/OneDrive/Desktop/swine flu/US_flu_functions.R")
@@ -403,7 +515,7 @@ remove(doc, taxa_nodes, chain_length, log_every, out_dir, save_every, xml_path,
        hog_survey_03, mcc_tree, tip_dates, tree_phylo, hog_census)
 
 
-## part four:   ARIMA(X)? ----
+## part four:   ARIMAX for clade prevalence  ----
 
 ## create time-series prevalence data for each clade within each state
 ## add a year-month column for grouping
@@ -562,7 +674,7 @@ gee_states     <- gee_states_tbl$state
 #fit_gee_pooled(dom_panel, "major_dominant", "ppt",     corstr = "ar1")
 
 
-## part six:    maps ----
+## part six:    node density maps ----
 
 ## density of samples from each state
 ## pull table of all unique state names and number of sequences from each, including those with no state
