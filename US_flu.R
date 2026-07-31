@@ -4,7 +4,7 @@
 ## part zero:   climate data pull ----
 
 ## slotted after hog census data and packages are loaded 
-## filter for counties represented by hog census?
+## filter for counties represented by hog census
 #hogs_county <- hog_census %>% filter(AGG_LEVEL_DESC == "COUNTY")
 
 # 5-digit FIPS key from your hog data
@@ -112,49 +112,53 @@
 
 #write.csv(climate_state_wt, "C:/Users/cgait/OneDrive/Desktop/climate_state_wt.csv", row.names = FALSE)
 
-
 ## part one:    metadata ----
+
+## all analysis for Climate predicts H3 influenza A clade turnover in swine population sin the United States
+## done in R version 4.4.2, current package versions are listed below
+
 set.seed(1738)
 source("C:/Users/cgait/OneDrive/Desktop/swine flu/US_flu_functions.R")
-library(ape)
-library(Biostrings)
-library(climateR)
-library(conflicted)
-library(data.table)
-library(dplyr)
-library(exactextractr)
-library(forecast) 
-library(geepack)
-library(ggnewscale)
-library(ggplot2)
-library(ggthemes)
-library(ggtree)
-library(gt)
-library(lubridate)
-library(MASS)
-library(msa)
-library(paletteer)
-library(patchwork)
-library(Polychrome)
-library(phangorn)
-library(readxl)
-library(rnaturalearth)
-library(rnaturalearthdata)
-library(scales)
-library(scico)
-library(sf)
-library(ShortRead)
-library(stringr)
-library(terra)
-library(tidyr)
-library(tidyverse)
-library(tigris)
-library(tseries)  
-library(treeio)
-library(trend)
-library(viridis)
-library(writexl)
-library(xml2)
+library(ape)               ##ape_5.8-1
+library(Biostrings)        ##Biostrings_2.74.1
+library(climateR)          ##climateR_0.3.7
+library(conflicted)        ##conflicted_1.2.0
+library(data.table)        ##data.table_1.18.4
+library(dplyr)             ##dplyr_1.2.1
+library(exactextractr)     ##exactextractr_0.10.1
+library(forecast)          ##forecast_9.0.2
+library(geepack)           ##geepack_1.3.13
+library(ggnewscale)        ##ggnewscale_0.5.2
+library(ggplot2)           ##ggplot2_4.0.3
+library(ggthemes)          ##ggthemes_5.2.0
+library(ggtree)            ##ggtree_3.14.0
+library(gt)                ##gt_1.3.0
+library(lubridate)         ##lubridate_1.9.5    
+library(MASS)              ##MASS_7.3-65
+library(msa)               ##msa_1.38.0 
+library(paletteer)         ##paletteer_1.7.0
+library(patchwork)         ##patchwork_1.3.0
+library(Polychrome)        ##Polychrome_1.5.4
+library(phangorn)          ##phangorn_2.12.1
+library(readxl)            ##readxl_1.4.5
+library(rnaturalearth)     ##rnaturalearth_1.2.0
+library(rnaturalearthdata) ##rnaturalearthdata_1.0.0
+library(scales)            ##scales_1.4.0
+library(scico)             ##scico_1.5.0
+library(sf)                ##sf_1.1-1
+library(ShortRead)         ##ShortRead_1.64.0
+library(stringr)           ##stringr_1.6.0
+library(terra)             ##terra_1.8-54 
+library(tidyr)             ##tidyr_1.3.2
+library(tidyverse)         ##tidyverse_2.0.0
+library(tigris)            ##tigris_2.2.1
+library(tseries)           ##tseries_0.10-61
+library(treeio)            ##treeio_1.30.0
+library(trend)             ##trend_1.1.6
+library(viridis)           ##viridis_0.6.5
+library(writexl)           ##writexl_1.5.4
+library(xml2)              ##xml2_1.3.8 
+#sessionInfo()
 
 conflict_prefer("select", "dplyr")
 conflict_prefer("filter", "dplyr")
@@ -325,8 +329,8 @@ tip_meta <- tip_meta %>% mutate(clade = case_when(
                                 clade == "1990.4.b1" ~ "1990.4.b1b2",
                                 clade == "1990.4.b2" ~ "1990.4.b1b2",
                                 clade == "" ~ "Missing",
-                                clade == "2010.1-like" ~ "2010.1like",
-                                clade == "2010.1" ~ "2010.1like",
+                                clade == "2010.1-like" ~ "2010.1",
+                                clade == "2010.1" ~ "2010.1",
                                 is.na(clade) ~ "Missing",
                                 TRUE ~ clade))
 #table(tip_meta$clade, useNA="always")
@@ -536,7 +540,7 @@ state_prev <- tip_meta_assigned %>% group_by(year_month, state, clade) %>%
   mutate(total = sum(count), prevalence = count / total) %>% ungroup()
 
 ## define the clades and time window of interest
-clades_of_interest <- c("2010.1like", "1990.4.a","1990.1")
+clades_of_interest <- c("2010.1", "1990.4.a","1990.1")
 states_of_interest <- c("Iowa","Nebraska","Missouri","North Carolina")
 date_start <- as.Date("1990-01-01")
 date_end   <- as.Date("2024-12-31")
@@ -547,13 +551,18 @@ dominant <- state_prev_filtered %>% group_by(state, year_month) %>%
   slice_max(prevalence, n = 1, with_ties = FALSE) %>% ungroup() %>% arrange(state, year_month) %>% group_by(state) %>%
   mutate(prev_dominant = dplyr::lag(clade),new_dominant = ifelse(clade != prev_dominant & !is.na(prev_dominant), 1, 0)) %>% ungroup()
 
+# clades represented in state level prevalence
+#table(state_prev$clade)
+# clades represented as dominant at the state level
+#table(dominant$clade)
+
 ## code indicator for lineages
 dominant <- dominant %>% mutate(major_clade = case_when(
             clade == "1990.1" ~ "1990", clade == "1990.4.a" ~ "1990",
             clade == "1990.4.b1b2" ~ "1990", clade == "1990.4.d" ~ "1990",
             clade == "1990.4.f" ~ "1990", clade == "1990.4.i" ~ "1990",
             clade == "1990.4.k" ~ "1990", clade == "1990.4like" ~ "1990",
-            clade == "2010.1like" ~ "2010", clade == "Other human" ~ "Human", TRUE ~ NA))
+            clade == "2010.1" ~ "2010", clade == "Other human" ~ "Human", TRUE ~ NA))
 
 ## indicator outcome of shift between the 2 major lineages
 dominant <- dominant %>% arrange(state, year_month) %>% group_by(state) %>% mutate(prev_major = dplyr::lag(major_clade),
@@ -588,8 +597,8 @@ clim_long <- clim_long %>% filter(date >= "2012-01-01")
 # d and D are constant across every model, the AICc / ΔAICc column in the final
 # output is fully comparable -- no cross-d apples-to-oranges problem.
 
-ds <- as.Date("2012-01-01"); de <- as.Date("2024-12-01")
-#run_2010 <- run_clade_arimax(state_prev, climate_state_wt, "Iowa", "2010.1like", ds, de)
+#ds <- as.Date("2012-01-01"); de <- as.Date("2024-12-01")
+#run_2010 <- run_clade_arimax(state_prev, climate_state_wt, "Iowa", "2010.1", ds, de)
 
 #run_2010$predictor_results      # which climate var best explains the clade
 #render_predictor_table(run_2010)
@@ -599,10 +608,10 @@ ds <- as.Date("2012-01-01"); de <- as.Date("2024-12-01")
 
 
 ## expand to multiple states and clades
-combos <- expand_grid(state = c("Iowa","Illinois","Indiana","Ohio","Pennsylvania","North Carolina",
-                      "Minnesota","South Dakota","Nebraska",
-                      "Oklahoma","Missouri","Kansas","Arkansas"),
-                      clade = c("2010.1like","1990.4.a"))
+#combos <- expand_grid(state = c("Iowa","Illinois","Indiana","Ohio","Pennsylvania","North Carolina",
+#                      "Minnesota","South Dakota","Nebraska",
+#                      "Oklahoma","Missouri","Kansas","Arkansas"),
+#                      clade = c("2010.1","1990.4.a"))
 #runs <- pmap(combos, ~ run_clade_arimax(state_prev, climate_state_wt, ..1, ..2, ds, de))
 #all_predictor_aic <- map_dfr(runs, "predictor_results")   # stacked, has state+clade cols
 
@@ -621,7 +630,7 @@ combos <- expand_grid(state = c("Iowa","Illinois","Indiana","Ohio","Pennsylvania
 #forest_predictor(predictor_summary, state_levels = c("Arkansas","Illinois","Indiana","Iowa",
 #                                   "Kansas", "Minnesota", "Missouri", "Nebraska", "North Carolina",                  
 #                                   "Ohio", "Oklahoma", "Pennsylvania","South Dakota"))
-#ggsave("predictor_forest.png", width = 14, height = 10, dpi = 300, bg = "white")
+#ggsave("figure_2.png", width = 14, height = 10, dpi = 500, bg = "white")
 
 
 ## part five:   gee for dominant clades ----
@@ -639,18 +648,17 @@ combos <- expand_grid(state = c("Iowa","Illinois","Indiana","Ohio","Pennsylvania
 ## window. NOTE: tip_meta_assigned is filtered to year >= 2003 upstream (part
 ## four), so although we ask for 2002 the series effectively begins 2003. To
 ## truly start in 2002, relax that filter where state_prev is built.
-gee_start <- as.Date("2003-01-01")
-gee_end   <- as.Date("2024-12-31")
+#gee_start <- as.Date("2003-01-01")
+#gee_end   <- as.Date("2024-12-31")
 
 ## states with >= 20 sequences in the window
-gee_states_tbl <- qualifying_states(state_prev, gee_start, gee_end, min_seqs = 30)
-gee_states     <- gee_states_tbl$state
+#gee_states_tbl <- qualifying_states(state_prev, gee_start, gee_end, min_seqs = 30)
+#gee_states     <- gee_states_tbl$state
 #print(gee_states_tbl)
 
 ## monthly dominant-clade panel for all qualifying states
 ## (both outcomes + climate predictors, temps detrended within state)
-#dom_panel <- build_dominant_panel(state_prev, climate_state_wt, gee_states,
-#                                  gee_start, gee_end)
+#dom_panel <- build_dominant_panel(state_prev, climate_state_wt, gee_states, gee_start, gee_end)
 
 ## per-state, per-outcome GEE: rank climate predictors by QIC, keep the best,
 ## robust-Wald inference + odds ratios, BH-adjusted across the family
@@ -699,11 +707,11 @@ state_centers <- st_as_sf(state_locations, coords = c("longitude", "latitude"), 
 
 ## KDE for node density surfaces within clades
 tree_files <- list(
-  "1990.4.a"= "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/1990.4.a/mcc_1990.4.a_downsampled.trees",
-  "1990.4.b"= "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/1990.4.b1b2/mcc_1990.4.b1b2_downsampled.trees",
-  "2010.1"  = "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/2010.1like/mcc_2010.1like_downsampled.trees",
-  "2010.2"  = "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/2010.2/mcc_2010.2_downsampled.trees")
-## smaller subclades (make tips = 13 have much lower densities so not included in results)
+  "A"= "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/1990.4.a/mcc_1990.4.a_downsampled.trees",
+  "B"= "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/1990.4.b1b2/mcc_1990.4.b1b2_downsampled.trees",
+  "C"  = "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/2010.1like/mcc_2010.1like_downsampled.trees",
+  "D"  = "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/2010.2/mcc_2010.2_downsampled.trees")
+## smaller subclades (bc the max n tips = 13, these have much lower densities so not included in results)
 #  "1990.4.e"= "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/smaller_subclades/mcc_1990.4.e.trees",
 #  "1990.4.f"= "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/smaller_subclades/mcc_1990.4.f.trees")
 #  "1990.4.i"= "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/smaller_subclades/mcc_1990.4.i.trees")
@@ -719,13 +727,35 @@ kde_list <- mapply(
 global_limits <- range(unlist(lapply(kde_list, `[[`, "density")))
 
 ## build maps on the shared scale
+## can we change the legend label from "density" to "KDE"?
 diffusion_maps <- mapply(
   FUN  = function(df, name) plot_diffusion_map(df, name, fill_limits = global_limits),
   df   = kde_list,
   name = names(kde_list),
   SIMPLIFY = FALSE)
-#subclade_maps <- wrap_plots(diffusion_maps, nrow = 2, ncol = 2 + plot_layout(guides = "collect"))
-#ggsave("C:/Users/cgait/OneDrive/Desktop/subclade_maps_smaller.jpeg", width=25,height=15,units=c("cm"), subclade_maps)
+
+## restyle each map first, then assemble
+diffusion_maps <- lapply(diffusion_maps, function(p) {
+  p +
+    scale_fill_paletteer_c(
+      "ggthemes::Purple", 1,
+      name   = "Kernel Density Estimation of Node Locations",
+      limits = global_limits,
+      oob    = scales::squish,
+      guide  = guide_colorbar(
+        title.position = "top",
+        title.hjust    = 0.5,
+        barwidth       = unit(8, "cm"),
+        barheight      = unit(0.5, "cm"))) +
+    theme(legend.position = "bottom",
+          legend.title    = element_text(size = 16),
+          legend.text     = element_text(size = 16))
+})
+
+subclade_maps <- wrap_plots(diffusion_maps, nrow = 2, ncol = 2) +
+  plot_layout(guides = "collect") +
+  plot_annotation(theme = theme(legend.position = "bottom"))
+#ggsave("C:/Users/cgait/OneDrive/Desktop/figure_1.jpeg", width = 25, height = 30, units = "cm", subclade_maps)
 
 ## node posterior support within subclades
 posterior_list <- mapply(
@@ -734,16 +764,37 @@ posterior_list <- mapply(
   subclade_name = names(tree_files),
   SIMPLIFY      = FALSE)
 
-# Proportion above a single threshold for every clade
-sapply(posterior_list, function(df) mean(df$posterior > 0.5))
-sapply(posterior_list, function(df) mean(df$posterior > 0.8))
-
 ## posterior is a probability -> fixed 0-1 scale across all four
 posterior_maps <- mapply(
   FUN  = function(df, name) plot_posterior_map(df, name, fill_limits = c(0, 1)),
   df   = posterior_list,
   name = names(posterior_list),
   SIMPLIFY = FALSE)
-#posterior_maps <- wrap_plots(posterior_maps, nrow = 2, ncol = 2 + plot_layout(guides = "collect"))
-#ggsave("C:/Users/cgait/OneDrive/Desktop/posterior_maps_smaller.jpeg", width=25, height=15, units = c("cm"), posterior_maps)
+
+## restyle each map first, then assemble
+posterior_maps <- lapply(posterior_maps, function(p) {
+  p +
+    scale_fill_paletteer_c(
+      "grDevices::ArmyRose", 1,
+      name   = "Posterior Probability",
+      limits = c(0, 1),
+      oob    = scales::squish,
+      guide  = guide_colorbar(
+        title.position = "top",
+        title.hjust    = 0.5,
+        barwidth       = unit(8, "cm"),
+        barheight      = unit(0.5, "cm"))) +
+    theme(legend.position = "bottom",
+          legend.title    = element_text(size = 16),
+          legend.text     = element_text(size = 16))
+})
+
+posterior_maps <- wrap_plots(posterior_maps, nrow = 2, ncol = 2) +
+  plot_layout(guides = "collect") +
+  plot_annotation(theme = theme(legend.position = "bottom"))
+#ggsave("C:/Users/cgait/OneDrive/Desktop/figure_s1.jpeg", width = 25, height = 30, units = "cm", posterior_maps)
+
+# Proportion above a single threshold for every clade
+#sapply(posterior_list, function(df) mean(df$posterior > 0.5))
+#sapply(posterior_list, function(df) mean(df$posterior > 0.8))
 

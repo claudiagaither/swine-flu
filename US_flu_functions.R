@@ -1,7 +1,7 @@
 ## Functions for US_flu script
 
 ## part three: continuous trait diffusion ----
-## ── 3. Helper: build a single clade XML ─────────────────────────────────────
+## Helper: build a single clade XML 
 ## v2: enforced monophyly + uncorrelated log-normal relaxed clock (UCLD)
 ##     following Ebola/WNV phylogeography approach (Dudas & Rambaut 2014,
 ##     Pybus et al. 2012, Lemey et al. 2010)
@@ -1078,9 +1078,8 @@ forest_predictor <- function(sig_tbl, ncol = NULL, point_size = 3.2,
     ggplot2::labs(
       x = xlab, y = NULL,
       title = "Selected climate predictor association, by clade",
-      subtitle = paste("ARIMAX xreg at best-AICc order; one row per state.",
-                       "Exploratory \u2012-2024 prevalence among sampled sequences.")) +
-    ggplot2::theme_minimal(base_size = base_size) +
+      subtitle = paste("ARIMAX xreg at best-AICc order; one row per state.")) +
+    ggplot2::theme_classic(base_size = base_size) +
     ggplot2::theme(panel.grid.major.y = ggplot2::element_blank(),
                    legend.position  = "bottom",
                    legend.text = ggplot2::element_text(size = 14),
@@ -1377,7 +1376,7 @@ forest_gee <- function(gee_tbl, ncol = NULL, point_size = 3.2,
       title = "Selected climate predictor association with dominant-clade switching",
       subtitle = paste("GEE logit (robust SE); one row per state.",
                        "Exploratory \u2014 dominant clade among sampled sequences.")) +
-    ggplot2::theme_minimal(base_size = base_size) +
+    ggplot2::theme_classic(base_size = base_size) +
     ggplot2::theme(panel.grid.major.y = ggplot2::element_blank(),
                    legend.position = "bottom",
                    legend.text = ggplot2::element_text(size = 14),
@@ -1515,7 +1514,7 @@ plot_posterior_map <- function(node_df,
   ggplot() + geom_sf(data = states_data,
             fill = "#f0ede8", color = "#d0ccc8", linewidth = 0.3) +
     geom_point(data = node_df,
-               aes(x = lon, y = lat, fill = posterior, size = 0.35),
+               aes(x = lon, y = lat, fill = posterior, size = 1),
                shape = 21, color = "grey20", stroke = 0.3, alpha = 0.85, 
                position = position_jitter(width = 0.2, height = 0.2)) +
     scale_fill_paletteer_c("grDevices::ArmyRose", 1,
