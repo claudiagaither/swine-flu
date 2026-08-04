@@ -9,7 +9,7 @@ USDA Census of Agriculture (https://quickstats.nass.usda.gov/) Search queries: P
 
 USDA Census of Agriculture Surveys (https://quickstats.nass.usda.gov/) Search queries: Program = Survey, Sector = Animals & Products, Group = Livestock, Commodity = Hogs, Category = Inventory, Geographic Level = County,  Year = 1997-2024
 
-State-level climate data (climate_state_wt, also generated in US_flu part zero)
+State-level climate data (extracted from GRIDMET in US_flu part zero)
 
 
 
