@@ -1,9 +1,11 @@
-## H3N2 influenza A transmission among domestic swine in the US
-## phylogeography and ecological predictors of transmission!
+
+## Analysis for "Climate variability is associated with H3 influenza A lineage turnover in United States swine populations" 
+## run in R version 4.4.2, current package versions are listed in part one
 
 ## part zero:   climate data pull ----
 
-## slotted after hog census data and packages are loaded 
+## should be slotted after hog census data and packages are loaded 
+
 ## filter for counties represented by hog census
 #hogs_county <- hog_census %>% filter(AGG_LEVEL_DESC == "COUNTY")
 
@@ -113,9 +115,6 @@
 #write.csv(climate_state_wt, "C:/Users/cgait/OneDrive/Desktop/climate_state_wt.csv", row.names = FALSE)
 
 ## part one:    metadata ----
-
-## all analysis for Climate predicts H3 influenza A clade turnover in swine population sin the United States
-## done in R version 4.4.2, current package versions are listed below
 
 set.seed(1738)
 source("C:/Users/cgait/OneDrive/Desktop/swine flu/US_flu_functions.R")
