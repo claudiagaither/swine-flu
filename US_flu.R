@@ -257,7 +257,7 @@ mcc_tree <- read.beast("C:/Users/cgait/OneDrive/Desktop/swine flu/sequence data/
 options(ignore.negative.edge = TRUE)
 
 ## tip/taxa metadata (dates, states & BV_BRC clade assignments)
-tip_meta <- read.table("C:/Users/cgait/OneDrive/Desktop/swine flu/sequence data/H3_1990-2026_metadata_final.tsv",
+tip_meta <- read.table("C:/Users/cgait/OneDrive/Desktop/swine flu/sequence data/H3_1990-2026_metadata.tsv",
                         header = TRUE, sep = "\t")
 tip_meta$date <- as.Date(tip_meta$date)
 
@@ -394,7 +394,7 @@ clade_df <- tree_df[, c("tip", "clade")]
 ## part three:  random-walk diffusion xmls ----
 
 ## template XML produced by BEAUTi (contains all 4589 taxa + sequences)
-#xml_path  <- "C:/Users/cgait/OneDrive/Desktop/BEAST runs/1990_v3/1990_USflu_tree.xml"
+#xml_path  <- "C:/Users/cgait/OneDrive/Desktop/BEAST runs/1990_v3/mcc_1990_v3.xml"
 #out_dir   <- "C:/Users/cgait/OneDrive/Desktop/clade_xmls"
 #dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
@@ -521,7 +521,8 @@ remove(doc, taxa_nodes, chain_length, log_every, out_dir, save_every, xml_path,
 
 ## part four:   ARIMAX for clade prevalence  ----
 
-## create time-series prevalence data for each clade within each state
+
+## part four A: create time-series prevalence data for each clade within each state
 ## add a year-month column for grouping
 tip_meta_assigned <- tip_meta_assigned %>% mutate(year_month = floor_date(as.Date(date), "month"))
 tip_meta_assigned$year <- as.integer(format(tip_meta_assigned$year_month, "%Y"))
@@ -588,10 +589,112 @@ clim_long <- clim %>% pivot_longer(all_of(clim_vars), names_to = "variable", val
 clim_long <- clim_long %>% filter(date <= "2024-12-31")
 clim_long <- clim_long %>% filter(date >= "2012-01-01")
 
+
+
+## part four B: climate trend diagnostics for time-series pre-processing
+# Goal: decide whether each weighted climate variable carries a long-term
+#       trend that should be removed before time-series modeling, and see
+#       how those trends relate to major_dominant clade shifts.
+
+#clim_vars <- c("tmax", "tmin", "tavg", "ppt", "vap", "ws", "abs_humidity")
+#is_major_shift <- function(df) df$major_dominant == 1
+
+# 1. Build a proper date + long format 
+#clim <- climate_state_wt %>% mutate(date = as.Date(sprintf("%d-%02d-01", year, month)))
+#clim_long <- clim %>% pivot_longer(all_of(clim_vars), names_to = "variable", values_to = "value") %>%
+#  mutate(variable = factor(variable, levels = clim_vars))  # keeps facet order
+#clim_long <- clim_long %>% filter(date < "2024-12-31")
+#clim_long <- clim_long %>% filter(date > "2014-01-01")
+
+# 2. Major-dominant shift events 
+# Per-state shift dates (for single-state overlays)...
+#major_shifts <- dominant %>% filter(is_major_shift(.)) %>% transmute(state, date = as.Date(year_month)) %>% distinct()
+
+# ...and shifts-per-year aggregated across all states (for the all-state plot)
+#shifts_per_year <- major_shifts %>% mutate(year = as.integer(format(date, "%Y"))) %>%
+#  count(year, name = "n_shifts")
+
+# PLOT 1 — Annual means: the clearest view for spotting a removable trend
+#   - one faint line per state
+#   - one pooled linear trend (red) per variable: slope/sign = the trend
+#   - grey vertical bars mark years with many major shifts
+#clim_annual <- clim_long %>% group_by(STATE_NAME, variable, year) %>%
+#  summarise(value = mean(value, na.rm = TRUE), .groups = "drop")
+
+# scale shift counts to sit in the background of each free-y facet
+#p1 <- ggplot(clim_annual, aes(year, value)) +
+#  # shift-frequency backdrop (rescaled per facet via geom_rug-style ticks)
+#  geom_vline(data = shifts_per_year %>% filter(n_shifts >= quantile(n_shifts, .75)),
+#             aes(xintercept = year), color = "pink3", linewidth = 0.4) +
+#  geom_line(aes(group = STATE_NAME), alpha = 0.70, color = "skyblue3") +
+#  geom_smooth(aes(group = 1), method = "lm", formula = y ~ x,
+#              se = TRUE, color = "tomato", linewidth = 0.9) +
+#  facet_wrap(~ variable, scales = "free_y", ncol = 2) +
+#  labs(title = "Annual-mean climate by state, 2014–2024",
+#       subtitle = "Red = pooled linear trend; pink lines = high-shift years",
+#      x = NULL, y = NULL) +
+#  theme_minimal(base_size = 11)
+#print(p1)
+
+# PLOT 2 — Deseasonalized monthly anomalies: confirms trend after removing
+#          the annual cycle (anomaly = value − state-specific monthly mean)
+#clim_anom <- clim_long %>% group_by(STATE_NAME, variable, month) %>%
+#  mutate(anomaly = value - mean(value, na.rm = TRUE)) %>% ungroup()
+#
+#p2 <- ggplot(clim_anom, aes(date, anomaly)) +
+#  geom_hline(yintercept = 0, color = "pink4", linewidth = 0.3) +
+#  geom_line(aes(group = STATE_NAME), alpha = 0.10, color = "skyblue3") +
+#  geom_smooth(aes(group = 1), method = "loess", span = 0.3,
+#              se = FALSE, color = "tomato", linewidth = 0.9) +
+#  facet_wrap(~ variable, scales = "free_y", ncol = 2) +
+#  labs(title = "Deseasonalized monthly anomalies, 2014–2024",
+#       subtitle = "Red loess on anomalies: a sloping line = residual trend to remove",
+#       x = NULL, y = "Anomaly (value − monthly climatology)") +
+#  theme_minimal(base_size = 11)
+
+# PLOT 3 — Single-state detail with that state's major shifts as vlines.
+#          Overlaying per-state events only makes sense within one state.
+#plot_one_state <- function(state_name) {
+#  d  <- filter(clim_long, STATE_NAME == state_name)
+#  sh <- filter(major_shifts, state == state_name)
+#  ggplot(d, aes(date, value)) +
+#    geom_vline(data = sh, aes(xintercept = date),
+#               color = "magenta", alpha = 0.5, linewidth = 0.4) +
+#    geom_line(color = "skyblue3", linewidth = 0.3) +
+#    geom_smooth(method = "lm", formula = y ~ x, se = FALSE,
+#                color = "tomato", linewidth = 0.7) +
+#    facet_wrap(~ variable, scales = "free_y", ncol = 2) +
+#    labs(title = paste0(state_name, ": monthly climate vs. major clade shifts"),
+#         subtitle = "Pink lines = major_dominant shifts; red = linear trend",
+#         x = NULL, y = NULL) +
+#    theme_minimal(base_size = 11)
+#}
+
+# QUANTITATIVE BACKUP — slope, significance, and (optional) Mann-Kendall
+#   per variable on the pooled annual means. Use this to decide objectively
+#   which variables actually need detrending vs. which are flat.
+
+#trend_summary <- clim_annual %>% group_by(variable) %>%
+#  group_modify(~{
+#    fit <- lm(value ~ year, data = .x)
+#    tibble(slope_per_year = coef(fit)[["year"]],
+#           p_value        = summary(fit)$coefficients["year", "Pr(>|t|)"],
+#           total_change   = coef(fit)[["year"]] * (max(.x$year) - min(.x$year))
+#           # , mk_p = trend::mk.test(
+#           #     .x %>% group_by(year) %>% summarise(v = mean(value)) %>% pull(v))$p.value
+#    )}) %>% ungroup() %>% arrange(p_value)
+
+#print(p1)
+#print(p2)
+#print(plot_one_state("North Carolina"))
+#print(plot_one_state("Iowa"))
+
+#print(trend_summary)
 ## based on the trend summary, the slope for max temp and avg temp have p values under 0.05
 ## min temp has a p-value of 0.0544, but others are all over 0.10
 
-# part three B: ARIMA parameterization sensitivity 
+
+# part four C: ARIMA parameterization sensitivity 
 # Picks the differencing order d (and seasonal D) PROGRAMMATICALLY via unit-root
 # tests, flags the choice, then sweeps only (p, q) at that fixed d/D. Because
 # d and D are constant across every model, the AICc / ΔAICc column in the final
@@ -707,10 +810,10 @@ state_centers <- st_as_sf(state_locations, coords = c("longitude", "latitude"), 
 
 ## KDE for node density surfaces within clades
 tree_files <- list(
-  "A"= "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/1990.4.a/mcc_1990.4.a_downsampled.trees",
-  "B"= "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/1990.4.b1b2/mcc_1990.4.b1b2_downsampled.trees",
-  "C"  = "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/2010.1like/mcc_2010.1like_downsampled.trees",
-  "D"  = "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/2010.2/mcc_2010.2_downsampled.trees")
+  "A"= "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/1990.4.a/mcc_1990.4.a.trees",
+  "B"= "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/1990.4.b1b2/mcc_1990.4.b.trees",
+  "C"  = "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/2010.1like/mcc_2010.1.trees",
+  "D"  = "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/2010.2/mcc_2010.2.trees")
 ## smaller subclades (bc the max n tips = 13, these have much lower densities so not included in results)
 #  "1990.4.e"= "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/smaller_subclades/mcc_1990.4.e.trees",
 #  "1990.4.f"= "C:/Users/cgait/OneDrive/Desktop/BEAST runs/downsampled_subclades/smaller_subclades/mcc_1990.4.f.trees")
