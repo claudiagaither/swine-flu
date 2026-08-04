@@ -1,10 +1,26 @@
-Analysis for "Climate predicts H3 influenza A clade turnover in swine populations in the United States"'
-US_flu_functions is sourced at the beginning of US_flu
+**Analysis for "Climate predicts H3 influenza A clade turnover in swine populations in the United States"**
 
-part 0) climate data pull;
-part 1) metadata;
-part 2) MCC tree and tips;
-part 3) random-walk diffusion XMLs;
-part 4) ARIMAX for clade prevalence;
-part 5) GEE for dominant clades;
-part 6) node density maps;
+
+*Required publicly available datasets:*
+
+US State Boundaries (https://hub.arcgis.com/datasets/TrainingServices::us-state-boundaries/about)
+
+USDA Census of Agriculture (https://quickstats.nass.usda.gov/) Search queries: Program = Census, Sector = Animals & Products, Group = Livestock, Commodity = Hogs, Category = Inventory, Geographic Level = County,  Year = 1997, 2002, 2007, 2012, 2017, 2022
+
+USDA Census of Agriculture Surveys (https://quickstats.nass.usda.gov/) Search queries: Program = Survey, Sector = Animals & Products, Group = Livestock, Commodity = Hogs, Category = Inventory, Geographic Level = County,  Year = 1997-2024
+
+State-level climate data (climate_state_wt, also generated in US_flu part zero)
+
+
+
+*Required datasets in the trees folder:*
+
+MCC tree for all sequences (mcc_1990_v3.trees)
+
+MCC tree log for all sequences (mcc_1990_v3.log)
+
+Clade assignments for MCC tree sequences (H3_1990-2026_metadata.tsv)
+
+MCC tree XML template (mcc_1990_v3.xml)
+
+MCC trees for individual clades (mcc_1990.4.a.trees, mcc_1990.4.b.trees, mcc_2010.1.trees, mcc_2010.2.trees)
