@@ -7,7 +7,7 @@ USDA Census of Agriculture (https://quickstats.nass.usda.gov/) Search queries: P
 
 USDA Census of Agriculture Surveys (https://quickstats.nass.usda.gov/) Search queries: Program = Survey, Sector = Animals & Products, Group = Livestock, Commodity = Hogs, Category = Inventory, Geographic Level = County,  Year = 1997-2024
 
-US State Boundaries (https://hub.arcgis.com/datasets/TrainingServices::us-state-boundaries/about)
+US state boundaries (https://hub.arcgis.com/datasets/TrainingServices::us-state-boundaries/about)
 
 State-level climate data (extracted from GRIDMET in US_flu part zero)
 
@@ -18,8 +18,6 @@ State-level climate data (extracted from GRIDMET in US_flu part zero)
 Clade assignments for MCC tree sequences (H3_1990-2026_metadata.tsv)
 
 MCC tree for all sequences (mcc_1990_v3.trees)
-
-MCC tree log for all sequences (mcc_1990_v3.log)
 
 MCC tree XML template for all sequences (mcc_1990_v3.xml)
 
