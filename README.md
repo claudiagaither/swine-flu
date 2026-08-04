@@ -1,4 +1,4 @@
-**Analysis for "Climate predicts H3 influenza A clade turnover in swine populations in the United States"**
+**Analysis for "Climate variability is associated with H3 influenza A lineage turnover in swine populations in the United States"**
 
 
 *Required publicly available datasets:*
